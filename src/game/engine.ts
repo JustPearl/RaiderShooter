@@ -132,6 +132,7 @@ interface WeaponDef {
 const VW = 854;
 const VH = 480;
 const ARENA = 31;
+const UP = new THREE.Vector3(0, 1, 0);
 
 const WEAPONS: WeaponDef[] = [
   { name: "P-9 SCRAPLOCK", tag: "P-9", dmg: 34, pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2 },
@@ -193,33 +194,22 @@ export class FoundryGame {
   private vmMuzzles: THREE.Object3D[] = [];
   private vmBase = new THREE.Vector3(0.3, -0.28, -0.55);
   private vmKick = 0;
-  private shotsFired = 0;
-  private shotsHit = 0;
-
-  /* gun animation state */
-  private pistolSlide: THREE.Object3D | null = null;
-  private shotgunPump: THREE.Object3D | null = null;
-  private vmEjects: THREE.Object3D[] = [];
-  private slideKick = 0; /* pistol slide reciprocation 0..1 */
-  private pumpT = -1; /* shotgun pump cycle timer, -1 = idle */
-  private recoilYaw = 0; /* horizontal recoil kick */
-  private ads = false; /* right mouse aim held */
-  private adsAmount = 0; /* 0 hip .. 1 aimed */
+  private vmSlide: THREE.Mesh | null = null;
+  private vmPump: THREE.Mesh | null = null;
+  private slideT = 0;
+  private pumpT = -1;
+  private rackT = -1;
+  private aimAmt = 0;
+  private aiming = false;
+  private recoilYaw = 0;
+  private gunLight: THREE.PointLight | null = null;
   private swayX = 0;
   private swayY = 0;
   private swayVX = 0;
   private swayVY = 0;
-  private idleSwayT = 0;
+  private shotsFired = 0;
+  private shotsHit = 0;
 
-  /* ejected shell casings */
-  private shells: {
-    mesh: THREE.Mesh;
-    mat: THREE.MeshLambertMaterial;
-    vel: THREE.Vector3;
-    spin: THREE.Vector3;
-    life: number;
-    bounced: boolean;
-  }[] = [];
   private shellGeo: THREE.BoxGeometry | null = null;
 
   /* world */
@@ -234,6 +224,7 @@ export class FoundryGame {
   private swipes: { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; life: number; base: number }[] = [];
   private swipeGeo: THREE.RingGeometry | null = null;
   private lastRunnerDir = 1;
+  private shells: { mesh: THREE.Mesh; vel: THREE.Vector3; spin: THREE.Vector3; life: number }[] = [];
 
   /* fx pools */
   private pCount = 600;
@@ -337,14 +328,17 @@ export class FoundryGame {
   };
   private onMouseDown = (e: MouseEvent) => {
     if (e.button === 0) this.firing = true;
+    if (e.button === 2) this.aiming = true;
   };
   private onMouseUp = (e: MouseEvent) => {
     if (e.button === 0) this.firing = false;
+    if (e.button === 2) this.aiming = false;
   };
   private onWheel = (e: WheelEvent) => {
     if (this.phase === "playing") this.switchTo(this.weaponIdx === 0 ? 1 : 0);
   };
   private onCtx = (e: Event) => e.preventDefault();
+  private onDocCtx = (e: Event) => e.preventDefault();
   private onLockChange = () => {
     if (document.pointerLockElement === this.canvas) {
       if (this.phase !== "playing") {
@@ -365,6 +359,7 @@ export class FoundryGame {
     document.addEventListener("mouseup", this.onMouseUp);
     window.addEventListener("wheel", this.onWheel);
     this.canvas.addEventListener("contextmenu", this.onCtx);
+    document.addEventListener("contextmenu", this.onDocCtx);
     document.addEventListener("pointerlockchange", this.onLockChange);
   }
   private unbindInput() {
@@ -375,6 +370,7 @@ export class FoundryGame {
     document.removeEventListener("mouseup", this.onMouseUp);
     window.removeEventListener("wheel", this.onWheel);
     this.canvas.removeEventListener("contextmenu", this.onCtx);
+    document.removeEventListener("contextmenu", this.onDocCtx);
     document.removeEventListener("pointerlockchange", this.onLockChange);
   }
 
@@ -442,6 +438,20 @@ export class FoundryGame {
     }
     for (let i = 0; i < this.pCount; i++) this.pLife[i] = 0;
     for (let i = 0; i < this.tCount; i++) this.tLife[i] = 0;
+    for (const s of this.shells) {
+      s.life = 0;
+      s.mesh.visible = false;
+    }
+    this.aiming = false;
+    this.aimAmt = 0;
+    this.swayX = 0;
+    this.swayY = 0;
+    this.swayVX = 0;
+    this.swayVY = 0;
+    this.slideT = 0;
+    this.pumpT = -1;
+    this.rackT = -1;
+    this.recoilYaw = 0;
     this.startIntermission();
   }
 
@@ -747,6 +757,10 @@ export class FoundryGame {
     const muzzleS = new THREE.Object3D();
     muzzleS.position.set(0, 0.05, -0.72);
     shotgun.add(muzzleS);
+    /* loading gate / ejection port on the receiver side */
+    const port = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.07, 0.1), new THREE.MeshBasicMaterial({ color: "#0b0b0d" }));
+    port.position.set(0.045, 0.02, 0.1);
+    shotgun.add(port);
 
     const gunLight = new THREE.PointLight(new THREE.Color("#ffe8c8"), 1.1, 2.4, 1.8);
     gunLight.position.set(0.1, 0.1, -0.2);
@@ -761,6 +775,9 @@ export class FoundryGame {
     this.scene.add(this.camera);
     this.vmGroups = [pistol, shotgun];
     this.vmMuzzles = [muzzleP, muzzleS];
+    this.vmSlide = slide;
+    this.vmPump = pump;
+    this.gunLight = gunLight;
   }
 
   /* ============================== FX pools ============================== */
@@ -812,6 +829,54 @@ export class FoundryGame {
       m.visible = false;
       this.scene.add(m);
       this.rings.push({ mesh: m, life: 0, speed: 14 });
+    }
+
+    /* ejected brass casings */
+    const shellGeo = new THREE.CylinderGeometry(0.013, 0.013, 0.045, 6);
+    const shellMat = new THREE.MeshLambertMaterial({ color: "#c9a24a", flatShading: true });
+    for (let i = 0; i < 14; i++) {
+      const m = new THREE.Mesh(shellGeo, shellMat);
+      m.visible = false;
+      this.scene.add(m);
+      this.shells.push({ mesh: m, vel: new THREE.Vector3(), spin: new THREE.Vector3(), life: 0 });
+    }
+  }
+
+  private ejectShell() {
+    for (const s of this.shells) {
+      if (s.life > 0) continue;
+      const muzzle = this.vmMuzzles[this.weaponIdx];
+      muzzle.getWorldPosition(this.tmpV);
+      const fwd = this.tmpV2;
+      this.camera.getWorldDirection(fwd);
+      const right = this.tmpV3.crossVectors(fwd, UP).normalize();
+      s.mesh.position.copy(this.tmpV).addScaledVector(right, 0.09).addScaledVector(UP, 0.02).addScaledVector(fwd, 0.12);
+      s.vel.set(0, 0, 0).addScaledVector(right, 2.6 + Math.random()).addScaledVector(UP, 2.4 + Math.random() * 1.2).addScaledVector(fwd, 0.9).addScaledVector(this.vel, 0.45);
+      s.spin.set(Math.random() * 22 - 11, Math.random() * 22 - 11, Math.random() * 22 - 11);
+      s.life = 1.5;
+      s.mesh.visible = true;
+      return;
+    }
+  }
+
+  private updateShells(dt: number) {
+    for (const s of this.shells) {
+      if (s.life <= 0) continue;
+      s.life -= dt;
+      s.vel.y -= 19 * dt;
+      s.mesh.position.addScaledVector(s.vel, dt);
+      s.mesh.rotation.x += s.spin.x * dt;
+      s.mesh.rotation.y += s.spin.y * dt;
+      s.mesh.rotation.z += s.spin.z * dt;
+      if (s.mesh.position.y < 0.025) {
+        s.mesh.position.y = 0.025;
+        s.vel.y = Math.abs(s.vel.y) * 0.32;
+        s.vel.x *= 0.55;
+        s.vel.z *= 0.55;
+        s.spin.multiplyScalar(0.5);
+        if (Math.abs(s.vel.y) < 0.4) s.vel.y = 0;
+      }
+      if (s.life <= 0) s.mesh.visible = false;
     }
   }
 
@@ -1101,24 +1166,26 @@ export class FoundryGame {
     const speed = Math.hypot(this.vel.x, this.vel.z);
     s += speed * 0.0035;
     if (!this.grounded) s += 0.02;
+    s *= 1 - 0.55 * this.aimAmt; /* ADS tightens the cone */
     return s;
   }
 
-  private tryFire() {
+  private tryFire(): boolean {
     const w = WEAPONS[this.weaponIdx];
-    if (this.fireCd > 0) return;
-    if (this.wState === "lowering" || this.wState === "raising") return;
+    if (this.fireCd > 0) return false;
+    if (this.wState === "lowering" || this.wState === "raising") return false;
     if (this.mags[this.weaponIdx] <= 0) {
       if (this.wState !== "reloading") this.startReload();
       else sfx.dry();
-      this.fireCd = 0.25;
-      return;
+      this.fireCd = 0.3;
+      return true;
     }
     if (this.wState === "reloading" && this.weaponIdx === 1) {
       /* shotgun reload interrupt — rack what you have */
       this.wState = "idle";
+      this.rackT = 0;
     } else if (this.wState === "reloading") {
-      return;
+      return false;
     }
 
     this.mags[this.weaponIdx]--;
@@ -1129,10 +1196,18 @@ export class FoundryGame {
     this.fovKick += w.fovPunch;
     this.vmKick = this.weaponIdx === 1 ? 0.16 : 0.07;
     this.trauma = Math.min(1.4, this.trauma + (this.weaponIdx === 1 ? 0.32 : 0.1));
+    this.recoilYaw += (Math.random() - 0.5) * (this.weaponIdx === 1 ? 0.021 : 0.008);
+    if (this.weaponIdx === 0) this.slideT = 1;
+    else this.pumpT = 0;
+    this.ejectShell();
+    if (this.gunLight) this.gunLight.intensity = this.weaponIdx === 1 ? 26 : 14;
     if (this.weaponIdx === 1) sfx.shotgun();
     else sfx.pistol();
     this.notifyShot(this.weaponIdx === 1);
     this.spawnMuzzleFlash();
+    /* lingering powder smoke at the muzzle */
+    this.vmMuzzles[this.weaponIdx].getWorldPosition(this.tmpV3);
+    this.spawnParticles(this.tmpV3.clone(), this.weaponIdx === 1 ? 6 : 3, ["#6e675e", "#4c463e"], 0.7, 0.55, -0.5);
 
     const spread = this.currentSpread();
     const camDir = new THREE.Vector3();
@@ -1173,9 +1248,7 @@ export class FoundryGame {
       this.spawnTracer(origin, hitPoint, this.weaponIdx === 1 ? "#ffc37e" : "#ffe8b0");
     }
     if (anyHit) this.shotsHit++;
-
-    /* pump action scheduled for shotgun */
-    if (this.weaponIdx === 1) setTimeout(() => sfx.pump(), 320);
+    return true;
   }
 
   private hitBarrel(b: Barrel, _weaponTag: string) {
@@ -1348,7 +1421,7 @@ export class FoundryGame {
 
     /* ---------- player movement ---------- */
     const sprint = this.keys.has("ShiftLeft") || this.keys.has("ShiftRight");
-    const speed = sprint ? 8.4 : 5.8;
+    const speed = (sprint ? 8.4 : 5.8) * (1 - 0.45 * this.aimAmt);
     let ix = 0;
     let iz = 0;
     if (this.keys.has("KeyW") || this.keys.has("ArrowUp")) iz -= 1;
@@ -1395,6 +1468,10 @@ export class FoundryGame {
     this.yaw -= this.mouseDX * sens;
     this.pitch -= this.mouseDY * sens;
     this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch));
+    /* gun sway spring gets an impulse from look velocity (damped while aiming) */
+    const swDamp = 1 - 0.55 * this.aimAmt;
+    this.swayVX += this.mouseDX * 0.011 * swDamp;
+    this.swayVY += this.mouseDY * 0.009 * swDamp;
     this.mouseDX = 0;
     this.mouseDY = 0;
 
@@ -1423,8 +1500,10 @@ export class FoundryGame {
     this.fireCd -= dt;
     this.heat = Math.max(0, this.heat - dt * 1.3);
     this.recoilPitch *= Math.exp(-10 * dt);
+    this.recoilYaw *= Math.exp(-9 * dt);
     this.fovKick *= Math.exp(-8 * dt);
     this.vmKick *= Math.exp(-14 * dt);
+    if (this.gunLight) this.gunLight.intensity = Math.max(1.1, this.gunLight.intensity * Math.exp(-16 * dt));
     this.comboT -= dt;
     if (this.comboT <= 0) this.combo = 0;
 
@@ -1468,25 +1547,107 @@ export class FoundryGame {
     }
 
     if (this.firing && (w.auto || this.fireCd <= -0.001 || this.fireCd > w.cooldown - 0.05)) {
-      if (w.auto || !this.semiLock) this.tryFire();
-      if (!w.auto) this.semiLock = true;
+      if (w.auto || !this.semiLock) {
+        if (this.tryFire() && !w.auto) this.semiLock = true;
+      }
     }
     if (!this.firing) this.semiLock = false;
 
-    /* viewmodel pose */
+    /* ---------- aim-down-sights blend ---------- */
+    const wantAim = this.aiming && (this.wState === "idle" || this.wState === "reloading") ? 1 : 0;
+    this.aimAmt += (wantAim - this.aimAmt) * Math.min(1, dt * (wantAim ? 12 : 9));
+    const aim = this.aimAmt;
+
+    /* ---------- sway spring integration ---------- */
+    const swSt = 70;
+    const swDm = 12;
+    this.swayVX += (-this.swayX * swSt - this.swayVX * swDm) * dt;
+    this.swayVY += (-this.swayY * swSt - this.swayVY * swDm) * dt;
+    this.swayX += this.swayVX * dt;
+    this.swayY += this.swayVY * dt;
+    const swX = Math.max(-0.09, Math.min(0.09, this.swayX));
+    const swY = Math.max(-0.07, Math.min(0.07, this.swayY));
+
+    /* ---------- weapon timers ---------- */
+    this.slideT = Math.max(0, this.slideT - dt * 7.5);
+    if (this.pumpT >= 0) {
+      this.pumpT += dt;
+      if (this.pumpT > 0.16 && this.pumpT - dt <= 0.16) sfx.pump();
+      if (this.pumpT > 0.42) this.pumpT = -1;
+    }
+    if (this.rackT >= 0) {
+      this.rackT += dt;
+      if (this.rackT > 0.14 && this.rackT - dt <= 0.14) sfx.pump();
+      if (this.rackT > 0.36) this.rackT = -1;
+    }
+
+    /* ---------- viewmodel pose ---------- */
     const vm = this.vmGroups[this.weaponIdx];
-    let vy = this.vmBase.y + this.bobY * 0.6 + Math.sin(this.bobT) * bobAmp * 0.6;
-    let vz = this.vmBase.z + this.vmKick;
-    let vrx = this.vmKick * 2.2;
+    /* hip base vs aimed base (centered, pulled in, raised) */
+    const baseX = this.vmBase.x * (1 - aim) + 0.0 * aim;
+    const baseY = this.vmBase.y * (1 - aim) + -0.165 * aim;
+    const baseZ = this.vmBase.z * (1 - aim) + -0.34 * aim;
+    const idleAmp = 1 - aim * 0.85;
+    let vy = baseY + this.bobY * 0.6 * idleAmp + Math.sin(this.bobT) * bobAmp * 0.6 * idleAmp - swY * 0.4;
+    let vx = baseX + Math.sin(this.bobT * 0.5) * bobAmp * 0.4 * idleAmp + swX * 0.45;
+    let vz = baseZ + this.vmKick + swY * 0.12;
+    let vrx = this.vmKick * 2.2 + swY * 1.1;
+    let vry = -swX * 0.9 + this.recoilYaw * 6;
+    let vrz = Math.sin(this.bobT) * bobAmp * 0.3 * idleAmp + swX * 0.5;
+
     if (this.wState === "lowering") vy -= 0.35 * (1 - this.wT / 0.16);
     if (this.wState === "raising") vy -= 0.35 * (this.wT / 0.2);
+
     if (this.wState === "reloading") {
-      const ph = this.weaponIdx === 1 ? Math.sin((this.shellT / w.reloadTime) * Math.PI) : Math.sin(((w.reloadTime - this.wT) / w.reloadTime) * Math.PI);
-      vy -= 0.22 * ph;
-      vrx = -0.7 * ph;
+      if (this.weaponIdx === 0) {
+        /* pistol: tilt out, mag drop, slap home */
+        const prog = 1 - this.wT / w.reloadTime;
+        const dip = Math.sin(prog * Math.PI);
+        vy -= 0.2 * dip;
+        vrx = -0.85 * dip;
+        vrz += 0.5 * dip;
+        vx += 0.05 * dip;
+      } else {
+        /* shotgun: nose up, each shell shoved in with a wrist twist */
+        vy -= 0.14;
+        vrx = -0.5;
+        const shellPh = Math.sin((this.shellT / w.reloadTime) * Math.PI);
+        vy -= 0.05 * shellPh;
+        vrz += 0.3 * shellPh;
+        vx -= 0.03 * shellPh;
+      }
     }
-    vm.position.set(this.vmBase.x + Math.sin(this.bobT * 0.5) * bobAmp * 0.4, vy, vz);
-    vm.rotation.set(vrx, 0, Math.sin(this.bobT) * bobAmp * 0.3);
+
+    /* interrupt-rack flourish after cancelling a shotgun reload */
+    if (this.rackT >= 0) {
+      const rk = Math.sin(Math.min(1, this.rackT / 0.36) * Math.PI);
+      vz += 0.02 * rk;
+      vrz -= 0.25 * rk;
+    }
+
+    vm.position.set(vx, vy, vz);
+    vm.rotation.set(vrx, vry, vrz);
+
+    /* ---------- animated gun parts ---------- */
+    if (this.vmSlide) {
+      /* reciprocating slide: snaps back, springs forward with overshoot */
+      const s = this.slideT;
+      const back = s > 0.55 ? ((s - 0.55) / 0.45) * 0.055 : Math.sin((s / 0.55) * Math.PI) * 0.02;
+      this.vmSlide.position.z = -0.08 + back;
+    }
+    if (this.vmPump) {
+      let pz = 0;
+      if (this.pumpT >= 0) {
+        const pt = this.pumpT;
+        if (pt < 0.2) pz = Math.sin((pt / 0.2) * Math.PI * 0.5) * 0.075;
+        else pz = Math.cos(((pt - 0.2) / 0.22) * Math.PI * 0.5) * 0.075;
+      } else if (this.rackT >= 0) {
+        pz = Math.sin(Math.min(1, this.rackT / 0.36) * Math.PI) * 0.06;
+      } else if (this.wState === "reloading" && this.weaponIdx === 1) {
+        pz = Math.sin((this.shellT / w.reloadTime) * Math.PI) * 0.02;
+      }
+      this.vmPump.position.z = -0.3 + pz;
+    }
 
     /* ---------- waves ---------- */
     if (this.waveMode === "intermission") {
@@ -1552,6 +1713,7 @@ export class FoundryGame {
 
     this.updateFx(dt);
     this.updateSwipes(dt);
+    this.updateShells(dt);
 
     /* ---------- camera ---------- */
     this.trauma = Math.max(0, this.trauma - dt * 2.1);
@@ -1559,11 +1721,11 @@ export class FoundryGame {
     const shX = (Math.random() - 0.5) * 0.16 * shake;
     const shY = (Math.random() - 0.5) * 0.14 * shake;
     const shR = (Math.random() - 0.5) * 0.05 * shake;
-    const targetFov = (sprint && hSpeed > 4 ? 80 : 75) + this.fovKick;
+    const targetFov = ((sprint && hSpeed > 4 ? 80 : 75) - 9 * this.aimAmt) + this.fovKick;
     this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 9);
     this.camera.updateProjectionMatrix();
     this.camera.position.set(this.pos.x + shX, 1.66 + this.pos.y + this.bobY + shY, this.pos.z);
-    this.camera.rotation.set(this.pitch + this.recoilPitch, this.yaw, shR);
+    this.camera.rotation.set(this.pitch + this.recoilPitch, this.yaw + this.recoilYaw, shR);
 
     /* ---------- HUD ---------- */
     const alive = this.enemies.filter((e) => e.state !== "dead").length + this.spawnQueue.length;

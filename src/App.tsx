@@ -427,6 +427,8 @@ export default function App() {
                   <span>MOVE</span>
                   <div className="flex gap-1"><span className="keycap">MOUSE</span></div>
                   <span>AIM — LEFT CLICK FIRES</span>
+                  <div className="flex gap-1"><span className="keycap">RMB</span></div>
+                  <span>AIM DOWN SIGHTS — STEADIER, TIGHTER</span>
                   <div className="flex gap-1"><span className="keycap">SHIFT</span></div>
                   <span>SPRINT</span>
                   <div className="flex gap-1"><span className="keycap">SPACE</span></div>
