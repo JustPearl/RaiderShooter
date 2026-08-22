@@ -669,8 +669,8 @@ export class FoundryGame {
     frame.position.set(0, -0.01, -0.05);
     pistol.add(frame);
     const gripP = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.16, 0.08), grip);
-    gripP.position.set(0, -0.1, 0.05);
-    gripP.rotation.x = 0.28;
+    gripP.position.set(0, -0.1, 0.06);
+    gripP.rotation.x = -0.28; /* bottom of grip rakes back toward the shooter */
     pistol.add(gripP);
     const sight = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.03, 0.02), darkMetal);
     sight.position.set(0, 0.11, -0.22);
