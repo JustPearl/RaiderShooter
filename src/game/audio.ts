@@ -93,10 +93,14 @@ export class SFX {
   }
 
   smg() {
-    /* tight open-bolt 9mm — shorter and snappier than the sidearm */
-    this.noise(0.026, { type: "bandpass", freq: 3600, q: 0.7, gain: this.j(0.34) });
-    this.noise(0.055, { freq: 3000, slideTo: 520, gain: this.j(0.3) });
-    this.tone(0.045, { type: "sine", freq: 175, slideTo: 62, gain: this.j(0.15) });
+    /* tight open-bolt 9mm — same impulse recipe as the sidearm but shorter.
+       The crack is a band-limited impulse and the body is a FIXED mid-band
+       (NO descending filter sweep — that sweep is what reads as a laser
+       "pew" at 12 rps). Only the sub-bass thump slides, which reads as
+       impact, not laser. */
+    this.noise(0.05, { hp: 340, freq: 4400 * this.j(1), gain: this.j(0.4) });
+    this.noise(0.045, { hp: 110, freq: 1300 * this.j(1), gain: this.j(0.3) });
+    this.tone(0.04, { type: "sine", freq: 160 * this.j(1), slideTo: 58, gain: this.j(0.14) });
     /* bolt clack trailing the crack */
     this.noise(0.02, { type: "bandpass", freq: 2150, q: 8, gain: 0.06, delay: 0.042 });
   }
