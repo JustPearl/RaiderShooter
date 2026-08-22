@@ -446,6 +446,16 @@ export default function App() {
                       <span className="font-bold text-[#ffb42e]">RED BARRELS</span> — volatile. Shoot them into a crowd and collect the savings.
                     </p>
                   </div>
+                  <div className="flex items-start gap-3">
+                    <svg width="30" height="18" viewBox="0 0 30 18" className="mt-0.5 shrink-0">
+                      <path d="M15 1 L28 16 H2 Z" fill="none" stroke="#ff2e1f" strokeWidth="2" />
+                      <rect x="14" y="6" width="2" height="5" fill="#ff2e1f" />
+                      <rect x="14" y="12.5" width="2" height="2" fill="#ff2e1f" />
+                    </svg>
+                    <p className="text-[#cdbfa8]">
+                      <span className="font-bold text-[#ff8a5e]">THREAT INTEL</span> — raiders flank, feint and encircle. A point-blank blast breaks a wound-up swing. Sidestep the brute's stomp, then punish the stagger.
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>

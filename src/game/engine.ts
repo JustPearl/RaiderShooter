@@ -70,7 +70,7 @@ interface Enemy {
   dmg: number;
   range: number;
   score: number;
-  state: "rise" | "chase" | "windup" | "strike" | "dead";
+  state: "rise" | "chase" | "windup" | "strike" | "charge" | "stagger" | "dead";
   stateT: number;
   attackCd: number;
   flash: number;
@@ -83,6 +83,20 @@ interface Enemy {
   mvx: number;
   mvz: number;
   ragdoll: Ragdoll | null;
+  /* tactics */
+  orbitDir: number;
+  style: "rush" | "flank";
+  stuckT: number;
+  feintT: number;
+  feintCd: number;
+  dodgeT: number;
+  dodgeVx: number;
+  dodgeVz: number;
+  dodgeDir: number;
+  chargeDirX: number;
+  chargeDirZ: number;
+  chargeLocked: boolean;
+  enraged: boolean;
 }
 
 interface Barrel {
@@ -192,6 +206,7 @@ export class FoundryGame {
   private gateLights: THREE.PointLight[] = [];
   private swipes: { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; life: number; base: number }[] = [];
   private swipeGeo: THREE.RingGeometry | null = null;
+  private lastRunnerDir = 1;
 
   /* fx pools */
   private pCount = 600;
@@ -876,6 +891,13 @@ export class FoundryGame {
     g.scale.setScalar(s);
     g.position.set(x, -1.4 * s, z);
 
+    /* runners alternate orbit sides to pincer; scrappers grow bolder each wave */
+    const orbitDir = kind === "runner" ? -this.lastRunnerDir : Math.random() < 0.5 ? -1 : 1;
+    if (kind === "runner") this.lastRunnerDir = orbitDir;
+    const flankChance = Math.min(0.25 + (this.wave - 1) * 0.045, 0.6);
+    const style: "rush" | "flank" =
+      kind === "runner" ? "flank" : kind === "brute" ? "rush" : Math.random() < flankChance ? "flank" : "rush";
+
     const hitData = { kind: "enemy" as const, enemy: null as unknown as Enemy };
     const enemy: Enemy = {
       group: g, rig,
@@ -899,6 +921,19 @@ export class FoundryGame {
       mvx: 0,
       mvz: 0,
       ragdoll: null,
+      orbitDir,
+      style,
+      stuckT: 0,
+      feintT: 0,
+      feintCd: 1.5 + Math.random() * 2,
+      dodgeT: 0,
+      dodgeVx: 0,
+      dodgeVz: 0,
+      dodgeDir: 1,
+      chargeDirX: 0,
+      chargeDirZ: 0,
+      chargeLocked: false,
+      enraged: false,
     };
     hitData.enemy = enemy;
     g.traverse((o) => {
@@ -938,11 +973,23 @@ export class FoundryGame {
 
   private damageEnemy(e: Enemy, dmg: number, point: THREE.Vector3, head: boolean, knock: number, dir: THREE.Vector3, weaponTag: string, force: number) {
     if (e.state === "dead") return;
+    if (e.state === "charge" && !head) dmg *= 0.5; /* charging brutes shrug off body shots */
     e.hp -= dmg;
     e.flash = 1;
     e.hitstun = 0.13;
     e.kvx += dir.x * knock;
     e.kvz += dir.z * knock;
+    /* heavy blows break telegraphed attacks — the shotgun is a parry */
+    if (e.state === "windup" && knock >= 4) {
+      e.state = "chase";
+      e.stateT = 0;
+      e.attackCd = Math.max(e.attackCd, 0.7);
+    }
+    if (e.state === "charge" && head) {
+      e.state = "stagger";
+      e.stateT = 0;
+      e.attackCd = 1.0;
+    }
     this.spawnParticles(point, head ? 12 : 7, ["#c42418", "#8a160c", "#ffb42e"], 4.5, 0.45, 10);
     sfx.hitEnemy(head);
     this.onEvent({ type: "hitmarker", head, kill: e.hp <= 0 });
@@ -1054,6 +1101,7 @@ export class FoundryGame {
     this.trauma = Math.min(1.4, this.trauma + (this.weaponIdx === 1 ? 0.32 : 0.1));
     if (this.weaponIdx === 1) sfx.shotgun();
     else sfx.pistol();
+    this.notifyShot(this.weaponIdx === 1);
     this.spawnMuzzleFlash();
 
     const spread = this.currentSpread();
@@ -1513,6 +1561,17 @@ export class FoundryGame {
     for (const m of e.rig.flashMats) m.emissive.setRGB(e.flash * 0.85, e.flash * 0.1, e.flash * 0.04);
     e.rig.eyeMat.color.copy(e.rig.eyeBase).lerp(FLASH_WHITE, e.flash * 0.8);
     e.attackCd -= dt;
+    e.feintCd -= dt;
+
+    /* desperation — wounded raiders fight faster, eyes burning */
+    if (!e.enraged && e.state !== "dead" && e.hp < e.maxHp * 0.3) {
+      e.enraged = true;
+      e.speed *= 1.18;
+      sfx.spawnRoar();
+    }
+    if (e.enraged) {
+      e.rig.eyeMat.color.lerp(FLASH_WHITE, (Math.sin(t * 9 + e.rig.seed) + 1) * 0.3);
+    }
 
     if (e.state === "dead") {
       e.stateT += dt;
@@ -1556,17 +1615,57 @@ export class FoundryGame {
     const stunMul = e.hitstun > 0 ? 0.25 : 1;
     e.hitstun -= dt;
 
+    const prevX = e.group.position.x;
+    const prevZ = e.group.position.z;
+
+    /* staggered assault — only a few raiders may commit at once */
+    const tokens = this.attackersActive();
+    const canAttack = e.attackCd <= 0 && tokens < this.maxAttackers();
+    const windupMul = Math.max(0.72, 1 - (this.wave - 1) * 0.018);
+
     if (e.state === "chase") {
       e.wobble += dt * 3;
-      const wob = Math.sin(e.wobble) * 0.35;
-      const mx = dirX + -dirZ * wob;
-      const mz = dirZ + dirX * wob;
-      const ml = Math.hypot(mx, mz) || 1;
       const sp = e.speed * stunMul;
-      e.mvx = (mx / ml) * sp;
-      e.mvz = (mz / ml) * sp;
+      const tangX = -dirZ * e.orbitDir;
+      const tangZ = dirX * e.orbitDir;
+      const orbitR = e.range * 1.3;
+      let moveX: number;
+      let moveZ: number;
+      let moveMul = 1;
+
+      if (!canAttack && dist < orbitR + 1.4) {
+        /* denied the attack token — circle just out of reach, hunting an opening */
+        const radial = Math.max(-0.85, Math.min(0.85, (dist - orbitR) * 0.8));
+        moveX = tangX * 0.95 + dirX * radial;
+        moveZ = tangZ * 0.95 + dirZ * radial;
+        moveMul = 0.85;
+      } else if (e.style === "flank" && dist > e.range * 1.05) {
+        /* sweep wide and come in from the side */
+        const closeness = Math.max(0.3, Math.min(1, (dist - e.range) / 4));
+        moveX = dirX * closeness + tangX * (1 - closeness) * 1.15;
+        moveZ = dirZ * closeness + tangZ * (1 - closeness) * 1.15;
+      } else {
+        const wob = Math.sin(e.wobble) * 0.35;
+        moveX = dirX + -dirZ * wob;
+        moveZ = dirZ + dirX * wob;
+      }
+      const ml = Math.hypot(moveX, moveZ) || 1;
+      e.mvx = (moveX / ml) * sp * moveMul;
+      e.mvz = (moveZ / ml) * sp * moveMul;
       e.group.position.x += e.mvx * dt + e.kvx * dt;
       e.group.position.z += e.mvz * dt + e.kvz * dt;
+
+      /* scrapper feint — a fake jab to bait the player's dodge rhythm */
+      if (e.kind === "scrapper" && e.feintT <= 0 && e.feintCd <= 0 && e.attackCd > 0.45 && dist < e.range * 2.3 && Math.random() < dt * 0.55) {
+        e.feintT = 0.22;
+        e.feintCd = 2.6 + Math.random() * 3.2;
+      }
+      if (e.feintT > 0) {
+        e.feintT -= dt;
+        e.group.position.x += Math.sin(e.group.rotation.y) * 2.1 * dt;
+        e.group.position.z += Math.cos(e.group.rotation.y) * 2.1 * dt;
+      }
+
       e.walkT += dt * sp * 1.9;
 
       /* separation from other enemies */
@@ -1590,13 +1689,32 @@ export class FoundryGame {
       while (dr < -Math.PI) dr += Math.PI * 2;
       e.group.rotation.y += dr * Math.min(1, dt * 10);
 
-      if (dist < e.range && e.attackCd <= 0) {
+      /* anti-stuck — wedged behind cover? flip orbit side and back off */
+      const moved = Math.hypot(e.group.position.x - prevX, e.group.position.z - prevZ);
+      if (moved < sp * 0.3 * dt) e.stuckT += dt;
+      else e.stuckT = 0;
+      if (e.stuckT > 0.65) {
+        e.stuckT = 0;
+        e.orbitDir *= -1;
+        e.group.position.x -= dirX * 0.4;
+        e.group.position.z -= dirZ * 0.4;
+      }
+
+      if (dist < e.range && canAttack) {
         e.state = "windup";
         e.stateT = 0;
+      } else if (e.kind === "brute" && this.wave >= 2 && e.attackCd <= 0 && tokens < this.maxAttackers() && dist > 5 && dist < 13.5) {
+        /* bull rush from mid range */
+        e.state = "charge";
+        e.stateT = 0;
+        e.chargeLocked = false;
+        e.attackCd = 1.2;
+        sfx.spawnRoar();
+        this.trauma = Math.min(1.4, this.trauma + 0.12);
       }
     } else if (e.state === "windup") {
       e.stateT += dt;
-      if (e.stateT >= WINDUP_TIME[e.kind]) {
+      if (e.stateT >= WINDUP_TIME[e.kind] * windupMul) {
         e.state = "strike";
         e.stateT = 0;
         sfx.swing();
@@ -1604,17 +1722,141 @@ export class FoundryGame {
       }
     } else if (e.state === "strike") {
       e.stateT += dt;
+      /* pounce — runners close the gap mid-swing so backpedalling isn't free */
+      const lunge = e.kind === "runner" ? 9.5 : e.kind === "scrapper" ? 2.6 : 0;
+      if (lunge > 0 && e.stateT < 0.16) {
+        e.group.position.x += Math.sin(e.group.rotation.y) * lunge * dt;
+        e.group.position.z += Math.cos(e.group.rotation.y) * lunge * dt;
+        this.collideCircle(e.group.position, 0.45 * ENEMY_DEFS[e.kind].scale);
+      }
       if (e.stateT >= 0.09 && e.stateT - dt < 0.09) {
         /* impact frame */
         if (dist < e.range * 1.25) this.damagePlayer(e.dmg, e.group.position);
       }
       if (e.stateT >= 0.4) {
-        e.attackCd = e.kind === "brute" ? 1.5 : 0.95;
+        e.attackCd = (e.kind === "brute" ? 1.5 : e.kind === "runner" ? 0.8 : 0.95) * (e.enraged ? 0.72 : 1);
         e.state = "chase";
+      }
+    } else if (e.state === "charge") {
+      e.stateT += dt;
+      const tele = 0.7;
+      if (e.stateT < tele) {
+        /* stomping telegraph — keeps tracking the player, begging to be sidestepped */
+        e.walkT += dt * 6;
+        if (Math.floor(e.stateT / 0.12) !== Math.floor((e.stateT - dt) / 0.12)) {
+          this.tmpV3.copy(e.group.position);
+          this.tmpV3.y += 0.1;
+          this.spawnParticles(this.tmpV3, 3, ["#4a3c2a", "#2a231b", "#5a4a36"], 1.4, 0.35, 4);
+        }
+        const targetRot = Math.atan2(dx, dz);
+        let dr = targetRot - e.group.rotation.y;
+        while (dr > Math.PI) dr -= Math.PI * 2;
+        while (dr < -Math.PI) dr += Math.PI * 2;
+        e.group.rotation.y += dr * Math.min(1, dt * 7);
+      } else {
+        if (!e.chargeLocked) {
+          e.chargeLocked = true;
+          e.chargeDirX = dirX;
+          e.chargeDirZ = dirZ;
+          sfx.spawnRoar();
+        }
+        const rush = 8.6;
+        const px = e.group.position.x;
+        const pz = e.group.position.z;
+        e.group.position.x += e.chargeDirX * rush * dt;
+        e.group.position.z += e.chargeDirZ * rush * dt;
+        this.collideCircle(e.group.position, 0.5 * ENEMY_DEFS[e.kind].scale);
+        e.walkT += dt * 15;
+        const adv = Math.hypot(e.group.position.x - px, e.group.position.z - pz);
+        const dNow = Math.hypot(this.pos.x - e.group.position.x, this.pos.z - e.group.position.z);
+        if (dNow < 1.55) {
+          /* trampled */
+          this.damagePlayer(e.dmg * 2, e.group.position);
+          this.trauma = Math.min(1.4, this.trauma + 0.5);
+          sfx.barrelClang();
+          e.state = "stagger";
+          e.stateT = 0;
+        } else if (adv < rush * dt * 0.4) {
+          /* slammed into architecture — briefly defenseless */
+          e.state = "stagger";
+          e.stateT = 0;
+          e.attackCd = 1.1;
+          sfx.barrelClang();
+          this.trauma = Math.min(1.4, this.trauma + 0.14);
+          this.tmpV3.copy(e.group.position);
+          this.tmpV3.y += 0.2;
+          this.spawnParticles(this.tmpV3, 8, ["#4a3c2a", "#2a231b"], 2.2, 0.4, 6);
+        } else if (e.stateT - tele > 1.15) {
+          e.state = "stagger";
+          e.stateT = 0;
+          e.attackCd = 1.1;
+        }
+      }
+    } else if (e.state === "stagger") {
+      e.stateT += dt;
+      e.walkT += dt * 2.5;
+      if (e.stateT >= 1.05) {
+        e.state = "chase";
+        e.attackCd = Math.max(e.attackCd, 0.85);
       }
     }
 
+    /* reactive dodge impulse — gunfire response */
+    if (e.dodgeT > 0) {
+      e.dodgeT -= dt;
+      e.group.position.x += e.dodgeVx * dt;
+      e.group.position.z += e.dodgeVz * dt;
+      const dk = Math.exp(-9 * dt);
+      e.dodgeVx *= dk;
+      e.dodgeVz *= dk;
+    }
+
     this.animRaider(e, dt, t);
+  }
+
+  /* how many raiders are currently committed to an attack */
+  private attackersActive(): number {
+    let n = 0;
+    for (const e of this.enemies) if (e.state === "windup" || e.state === "strike" || e.state === "charge") n++;
+    return n;
+  }
+
+  private maxAttackers(): number {
+    return Math.min(2 + Math.floor(this.wave / 2), 5);
+  }
+
+  /* enemies hear the shot — nearby raiders may sidestep, and a heavy blast
+     interrupts telegraphed attacks (the shotgun is a parry) */
+  private notifyShot(shotgun: boolean) {
+    for (const e of this.enemies) {
+      if (e.state === "dead" || e.state === "rise") continue;
+      const d = e.group.position.distanceTo(this.pos);
+      const rr = shotgun ? 7.5 : 4.2;
+      if (d > rr) continue;
+      const chance = shotgun
+        ? e.kind === "runner" ? 0.8 : e.kind === "scrapper" ? 0.5 : 0.25
+        : e.kind === "runner" ? 0.3 : 0.15;
+      if (Math.random() >= chance) continue;
+      const ex = e.group.position.x - this.pos.x;
+      const ez = e.group.position.z - this.pos.z;
+      const el = Math.hypot(ex, ez) || 1;
+      const side = Math.random() < 0.5 ? 1 : -1;
+      e.dodgeVx = (-ez / el) * side * 6.5;
+      e.dodgeVz = (ex / el) * side * 6.5;
+      e.dodgeT = 0.28;
+      e.dodgeDir = side;
+      if (e.state === "windup") {
+        e.state = "chase";
+        e.stateT = 0;
+        e.attackCd = Math.max(e.attackCd, 0.55);
+      } else if (e.state === "charge" && !e.chargeLocked && shotgun) {
+        /* a point-blank blast can still stop the bull */
+        e.state = "stagger";
+        e.stateT = 0;
+        e.attackCd = 1.1;
+        sfx.barrelClang();
+      }
+    }
   }
 
   /* drive the skeletal rig from the enemy's current state */
@@ -1635,6 +1877,9 @@ export class FoundryGame {
       yawLocal: yl,
       pitchToPlayer: Math.atan2(1.66 - headY, Math.max(1.2, dist)),
       hitstun: Math.max(0, e.hitstun),
+      feint: e.feintT > 0 ? Math.sin((1 - e.feintT / 0.22) * Math.PI) : 0,
+      dodgeLean: e.dodgeT > 0 ? e.dodgeDir * Math.min(1, e.dodgeT / 0.18) : 0,
+      windupMul: Math.max(0.72, 1 - (this.wave - 1) * 0.018),
     });
   }
 

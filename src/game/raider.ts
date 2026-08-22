@@ -41,7 +41,7 @@ export interface RaiderRig {
 }
 
 export interface RaiderAnimInput {
-  state: "rise" | "chase" | "windup" | "strike" | "dead";
+  state: "rise" | "chase" | "windup" | "strike" | "charge" | "stagger" | "dead";
   stateT: number;
   walkT: number;
   t: number;
@@ -49,6 +49,9 @@ export interface RaiderAnimInput {
   yawLocal: number; // signed angle from body facing to the player
   pitchToPlayer: number; // radians, + = look up
   hitstun: number;
+  feint: number; // 0..1 fake-swing pulse
+  dodgeLean: number; // signed sidestep lean
+  windupMul: number; // wave-based telegraph speedup
 }
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
@@ -362,8 +365,17 @@ export function updateRaiderAnim(rig: RaiderRig, kind: RaiderKind, inp: RaiderAn
       p.elRx = 0.25;
       p.shLx = -swing * 0.5;
     }
+
+    /* feint jab — a quick fake swing to bait the player's rhythm */
+    if (inp.feint > 0) {
+      p.shRx += inp.feint * 1.25;
+      p.elRx -= inp.feint * 0.5;
+      p.spineX += inp.feint * 0.3;
+      p.thighR -= inp.feint * 0.5;
+      p.thighL += inp.feint * 0.3;
+    }
   } else if (inp.state === "windup") {
-    const k = clamp(inp.stateT / WINDUP_TIME[kind], 0, 1);
+    const k = clamp(inp.stateT / (WINDUP_TIME[kind] * inp.windupMul), 0, 1);
     const e = k * k * (3 - 2 * k);
     p.rate = 11;
     p.thighL = 0.42 * e;
@@ -436,6 +448,67 @@ export function updateRaiderAnim(rig: RaiderRig, kind: RaiderKind, inp: RaiderAn
       p.spineY = -0.55 * e;
       p.shLx = 0.4;
     }
+  } else if (inp.state === "charge") {
+    const tele = 0.7;
+    if (inp.stateT < tele) {
+      /* coiled stomp telegraph — hauled back and trembling */
+      const k = clamp(inp.stateT / tele, 0, 1);
+      const e = k * k * (3 - 2 * k);
+      const pump = Math.sin(inp.t * 26) * 0.06 * e;
+      p.rate = 12;
+      p.spineX = 0.34 * e;
+      p.thighL = 0.55 * e + pump;
+      p.thighR = 0.55 * e - pump;
+      p.kneeL = 0.85 * e + 0.12;
+      p.kneeR = 0.85 * e + 0.12;
+      p.shRx = 0.85 * e;
+      p.shLx = 0.85 * e;
+      p.elRx = 0.6;
+      p.elLx = 0.6;
+      p.shRz = 0.25 * e;
+      p.shLz = -0.25 * e;
+      p.headPitch = clamp(-inp.pitchToPlayer, -0.4, 0.6) - 0.12 * e;
+      p.bobY = -0.08 * e;
+    } else {
+      /* blind bull rush — low, arms streaming behind */
+      p.rate = 15;
+      p.spineX = 0.5;
+      p.thighL = Math.sin(ph) * 1.15;
+      p.thighR = -Math.sin(ph) * 1.15;
+      p.kneeL = 0.2 + Math.max(0, Math.sin(ph - 0.7)) * 0.9;
+      p.kneeR = 0.2 + Math.max(0, -Math.sin(ph - 0.7)) * 0.9;
+      p.ankleL = -(p.thighL + p.kneeL) * 0.6;
+      p.ankleR = -(p.thighR + p.kneeR) * 0.6;
+      p.shRx = 0.95;
+      p.shLx = 0.95;
+      p.elRx = 0.25;
+      p.elLx = 0.25;
+      p.shRz = 0.35;
+      p.shLz = -0.35;
+      p.headPitch = 0.26;
+      p.bobY = Math.abs(Math.sin(ph)) * 0.05;
+    }
+  } else if (inp.state === "stagger") {
+    /* dazed stumble — wall hit, trample whiff or a cracked skull */
+    const k = clamp(inp.stateT / 1.05, 0, 1);
+    const wob = Math.sin(inp.t * 6.5 + rig.seed) * (1 - k);
+    p.rate = 9;
+    p.spineX = 0.4 - 0.22 * k;
+    p.spineZ = wob * 0.14;
+    p.spineY = wob * 0.2;
+    p.thighL = 0.3 + wob * 0.1;
+    p.thighR = 0.24 - wob * 0.1;
+    p.kneeL = 0.5;
+    p.kneeR = 0.42;
+    p.shLx = 0.5;
+    p.shRx = 0.45;
+    p.shLz = -0.55;
+    p.shRz = 0.5;
+    p.elLx = 0.7;
+    p.elRx = 0.6;
+    p.headPitch = 0.5 * (1 - k * 0.5);
+    p.headYaw = wob * 0.5;
+    p.bobY = -0.03;
   } else if (inp.state === "rise") {
     const k = clamp(inp.stateT / 0.45, 0, 1);
     const e = k * k * (3 - 2 * k);
@@ -475,7 +548,7 @@ export function updateRaiderAnim(rig: RaiderRig, kind: RaiderKind, inp: RaiderAn
   }
 
   /* head tracking — the head hunts the player independently of the body */
-  if (inp.state !== "dead") {
+  if (inp.state !== "dead" && inp.state !== "stagger") {
     let yawT = clamp(wrapPi(inp.yawLocal) * 1.25 - p.spineY, -1.1, 1.1);
     /* positive rotation.x tilts the face downward, so invert the aim angle */
     let pitchT = clamp(-inp.pitchToPlayer, -0.45, 0.62);
@@ -491,6 +564,9 @@ export function updateRaiderAnim(rig: RaiderRig, kind: RaiderKind, inp: RaiderAn
       const rk = clamp(inp.stateT / 0.45, 0, 1);
       pitchT += 0.5 * (1 - rk * rk * (3 - 2 * rk)); /* head hangs, then lifts */
       yawT += Math.sin(rig.seed) * 0.5 * (1 - rk);
+    } else if (inp.state === "charge" && inp.stateT >= 0.7) {
+      yawT *= 0.05; /* eyes pinned forward for the rush */
+      pitchT = 0.26;
     }
     const f = clamp(inp.hitstun * 6, 0, 1);
     if (f > 0) {
@@ -504,6 +580,14 @@ export function updateRaiderAnim(rig: RaiderRig, kind: RaiderKind, inp: RaiderAn
     }
     p.headYaw = yawT;
     p.headPitch = pitchT;
+  }
+
+  /* dodge lean — reactive sidestep away from gunfire */
+  if (inp.dodgeLean !== 0 && (inp.state === "chase" || inp.state === "windup")) {
+    p.spineZ += inp.dodgeLean * 0.4;
+    p.hipsZ += inp.dodgeLean * 0.12;
+    p.shLz -= inp.dodgeLean * 0.3;
+    p.shRz -= inp.dodgeLean * 0.3;
   }
 
   /* apply with state-dependent damping for snappy strikes / heavy deaths */
