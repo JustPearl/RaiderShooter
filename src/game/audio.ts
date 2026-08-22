@@ -47,6 +47,11 @@ export class SFX {
     src.stop(t0 + dur + 0.02);
   }
 
+  /* small per-shot variation so gunfire never sounds like a looped sample */
+  private j(v: number, r = 0.14) {
+    return v * (1 + (Math.random() * 2 - 1) * r);
+  }
+
   private tone(dur: number, opts: { type?: OscillatorType; freq?: number; slideTo?: number; gain?: number; delay?: number; detune?: number } = {}) {
     if (!this.ctx || !this.master) return;
     const t0 = this.ctx.currentTime + (opts.delay ?? 0);
@@ -64,31 +69,58 @@ export class SFX {
   }
 
   pistol() {
-    this.noise(0.11, { type: "highpass", freq: 900, gain: 0.5 });
-    this.noise(0.16, { freq: 2600, slideTo: 300, gain: 0.55 });
-    this.tone(0.09, { type: "square", freq: 190, slideTo: 60, gain: 0.22 });
+    /* muzzle crack — instant attack, gone in ~35ms */
+    this.noise(0.035, { type: "highpass", freq: 1900, gain: this.j(0.46) });
+    /* body — mid-band falling sweep */
+    this.noise(0.1, { freq: 2500, slideTo: 340, gain: this.j(0.5) });
+    /* chest thump */
+    this.tone(0.1, { type: "sine", freq: 150, slideTo: 52, gain: this.j(0.24) });
+    /* slide cycling back — a dry mechanical tick just after the report */
+    this.noise(0.038, { type: "bandpass", freq: 1900, q: 7, gain: 0.11, delay: 0.075 });
+    this.noise(0.03, { type: "bandpass", freq: 2700, q: 9, gain: 0.09, delay: 0.115 });
   }
 
   shotgun() {
-    this.noise(0.3, { freq: 3400, slideTo: 120, gain: 0.85 });
-    this.noise(0.42, { freq: 900, slideTo: 60, gain: 0.7 });
-    this.tone(0.28, { type: "sine", freq: 120, slideTo: 34, gain: 0.6 });
-    this.noise(0.1, { type: "highpass", freq: 2400, gain: 0.35 });
+    /* wide initial crack */
+    this.noise(0.055, { type: "highpass", freq: 1350, gain: this.j(0.52) });
+    /* the boom — broad lowpass sweep, this is the weight of it */
+    this.noise(0.34, { freq: 3300, slideTo: 105, gain: this.j(0.82) });
+    /* heavy mid body */
+    this.noise(0.42, { freq: 880, slideTo: 55, gain: this.j(0.6) });
+    /* deep thump + chamber resonance */
+    this.tone(0.3, { type: "sine", freq: 104, slideTo: 29, gain: this.j(0.6) });
+    this.tone(0.17, { type: "triangle", freq: 66, slideTo: 42, gain: 0.28, delay: 0.012 });
+    /* spent shell hitting the floor plates a beat later */
+    this.noise(0.05, { type: "bandpass", freq: 3100, q: 8, gain: 0.07, delay: 0.16 });
   }
 
   pump() {
-    this.noise(0.05, { type: "bandpass", freq: 2200, q: 4, gain: 0.22 });
-    this.noise(0.05, { type: "bandpass", freq: 1500, q: 4, gain: 0.22, delay: 0.13 });
+    /* forend slides back, then slams home and locks */
+    this.noise(0.045, { type: "bandpass", freq: 1750, q: 5, gain: 0.18 });
+    this.noise(0.05, { type: "bandpass", freq: 2450, q: 7, gain: 0.24, delay: 0.13 });
+    this.tone(0.05, { type: "square", freq: 430, slideTo: 170, gain: 0.055, delay: 0.13 });
   }
 
   reload(stage: number) {
-    if (stage === 0) this.noise(0.06, { type: "bandpass", freq: 1100, q: 5, gain: 0.3 });
-    else if (stage === 1) this.noise(0.05, { type: "bandpass", freq: 2600, q: 6, gain: 0.26 });
-    else this.tone(0.06, { type: "square", freq: 700, slideTo: 1400, gain: 0.1 });
+    if (stage === 0) {
+      /* mag release thud + recoil spring */
+      this.noise(0.05, { type: "bandpass", freq: 780, q: 4, gain: 0.26 });
+      this.noise(0.13, { type: "highpass", freq: 3100, gain: 0.045, delay: 0.04 });
+    } else if (stage === 1) {
+      /* shell onto the lifter, then shoved up into the tube */
+      this.noise(0.035, { type: "bandpass", freq: 2650, q: 6, gain: 0.2 });
+      this.noise(0.04, { type: "bandpass", freq: 1250, q: 5, gain: 0.15, delay: 0.065 });
+    } else {
+      /* slide / action bar snaps home */
+      this.noise(0.04, { type: "bandpass", freq: 2150, q: 8, gain: 0.24 });
+      this.tone(0.05, { type: "square", freq: 640, slideTo: 215, gain: 0.07 });
+    }
   }
 
   dry() {
-    this.tone(0.05, { type: "square", freq: 900, slideTo: 500, gain: 0.12 });
+    /* striker click on an empty chamber */
+    this.noise(0.028, { type: "bandpass", freq: 2500, q: 10, gain: 0.19 });
+    this.tone(0.04, { type: "square", freq: 840, slideTo: 430, gain: 0.07, delay: 0.012 });
   }
 
   ricochet() {
