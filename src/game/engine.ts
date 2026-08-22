@@ -261,6 +261,8 @@ export class FoundryGame {
   private aimAmt = 0;
   private aiming = false;
   private recoilYaw = 0;
+  private recoilSpring = 0;
+  private recoilSpringV = 0;
   private gunLight: THREE.PointLight | null = null;
   private swayX = 0;
   private swayY = 0;
@@ -507,6 +509,8 @@ export class FoundryGame {
     this.trauma = 0;
     this.recoilPitch = 0;
     this.recoilYaw = 0;
+    this.recoilSpring = 0;
+    this.recoilSpringV = 0;
     for (const e of this.enemies) this.scene.remove(e.group);
     this.enemies = [];
     this.shootables = this.shootables.filter((m) => m.userData.hit?.kind !== "enemy");
@@ -534,6 +538,8 @@ export class FoundryGame {
     this.pumpT = -1;
     this.rackT = -1;
     this.recoilYaw = 0;
+    this.recoilSpring = 0;
+    this.recoilSpringV = 0;
     this.startIntermission();
   }
 
@@ -1285,22 +1291,23 @@ export class FoundryGame {
     this.fireCd = w.cooldown / this.fireMul;
     this.shotsFired++;
     this.heat = Math.min(1, this.heat + (this.weaponIdx === 0 ? 0.36 : 0.5));
-    /* ---- realistic recoil: a permanent aim-climb you must pull down against,
-         plus a fast recoverable snap — every shot rolls its own magnitude,
-         horizontal drift and torque, and bracing (ADS) soaks ~35% of it ---- */
+    /* ---- recoil: a springy camera climb that overshoots back to rest, a
+         damped snap and slight horizontal drift — every shot rolls its own
+         magnitude, and bracing (ADS) soaks ~35% of it. The viewmodel kick
+         is deliberately left at full strength ---- */
     const kickVar = 0.85 + Math.random() * 0.6; /* 85%–145% power per shot */
     const brace = 1 - 0.35 * this.aimAmt;
     const totalKick = w.kick * kickVar * brace;
-    /* permanent displacement — goes into your real aim, so sustained fire climbs */
-    this.pitch = Math.min(1.45, this.pitch + totalKick * 0.72);
+    /* springy climb — an upward impulse the spring carries back past rest */
+    this.recoilSpringV += totalKick * 26;
     const sideKick = (Math.random() - 0.5) * 2 * totalKick * (this.weaponIdx === 1 ? 0.7 : 0.52);
-    this.yaw += sideKick * 0.55;
-    /* recoverable visual snap — the per-shot kick you see, then it settles */
-    this.recoilPitch += totalKick * 0.85;
-    this.recoilYaw += sideKick * 0.8;
-    this.fovKick += w.fovPunch * (0.95 + Math.random() * 0.55);
+    this.yaw += sideKick * 0.3;
+    /* damped visual snap */
+    this.recoilPitch += totalKick * 0.42;
+    this.recoilYaw += sideKick * 0.45;
+    this.fovKick += w.fovPunch * (0.6 + Math.random() * 0.4);
     this.vmKick = (this.weaponIdx === 1 ? 0.19 : 0.085) * kickVar;
-    this.trauma = Math.min(1.4, this.trauma + (this.weaponIdx === 1 ? 0.36 : 0.12) * kickVar);
+    this.trauma = Math.min(1.4, this.trauma + (this.weaponIdx === 1 ? 0.26 : 0.08) * kickVar);
     if (this.weaponIdx === 0) this.slideT = 1;
     else this.pumpT = 0;
     this.ejectShell();
@@ -1735,6 +1742,9 @@ export class FoundryGame {
     this.heat = Math.max(0, this.heat - dt * 0.85);
     this.recoilPitch *= Math.exp(-10 * dt);
     this.recoilYaw *= Math.exp(-9 * dt);
+    /* underdamped spring — the climb swings up, overshoots rest, and settles */
+    this.recoilSpringV += (-110 * this.recoilSpring - 10 * this.recoilSpringV) * dt;
+    this.recoilSpring += this.recoilSpringV * dt;
     this.fovKick *= Math.exp(-8 * dt);
     this.vmKick *= Math.exp(-14 * dt);
     if (this.gunLight) this.gunLight.intensity = Math.max(1.1, this.gunLight.intensity * Math.exp(-16 * dt));
@@ -1959,7 +1969,7 @@ export class FoundryGame {
     this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 9);
     this.camera.updateProjectionMatrix();
     this.camera.position.set(this.pos.x + shX, 1.66 + this.pos.y + this.bobY + shY, this.pos.z);
-    this.camera.rotation.set(this.pitch + this.recoilPitch, this.yaw + this.recoilYaw, shR);
+    this.camera.rotation.set(this.pitch + this.recoilPitch + this.recoilSpring, this.yaw + this.recoilYaw, shR);
 
     /* ---------- HUD ---------- */
     const alive = this.enemies.filter((e) => e.state !== "dead").length + this.spawnQueue.length;
