@@ -261,6 +261,7 @@ export class FoundryGame {
   private aimAmt = 0;
   private aiming = false;
   private recoilYaw = 0;
+  private recoilRoll = 0;
   private gunLight: THREE.PointLight | null = null;
   private swayX = 0;
   private swayY = 0;
@@ -505,6 +506,9 @@ export class FoundryGame {
     this.shotsFired = 0;
     this.shotsHit = 0;
     this.trauma = 0;
+    this.recoilPitch = 0;
+    this.recoilYaw = 0;
+    this.recoilRoll = 0;
     for (const e of this.enemies) this.scene.remove(e.group);
     this.enemies = [];
     this.shootables = this.shootables.filter((m) => m.userData.hit?.kind !== "enemy");
@@ -532,6 +536,7 @@ export class FoundryGame {
     this.pumpT = -1;
     this.rackT = -1;
     this.recoilYaw = 0;
+    this.recoilRoll = 0;
     this.startIntermission();
   }
 
@@ -1009,10 +1014,12 @@ export class FoundryGame {
     for (const f of this.muzzleFlashes) {
       if (f.life <= 0) {
         f.mesh.visible = true;
-        f.mesh.position.copy(this.tmpV);
-        f.mesh.rotation.z = Math.random() * Math.PI;
-        const s = this.weaponIdx === 1 ? 1.5 : 0.85;
-        f.mesh.scale.setScalar(s);
+        /* every flash is a different burst: rotated, stretched, jittered off-axis */
+        this.tmpV2.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+        f.mesh.position.copy(this.tmpV).addScaledVector(this.tmpV2, 0.04);
+        f.mesh.rotation.z = Math.random() * Math.PI * 2;
+        const s = (this.weaponIdx === 1 ? 1.5 : 0.85) * (0.75 + Math.random() * 0.5);
+        f.mesh.scale.set(s * (0.8 + Math.random() * 0.4), s * (0.8 + Math.random() * 0.4), s);
         f.mesh.lookAt(this.camera.getWorldPosition(this.tmpV2));
         f.life = 0.05;
         break;
@@ -1021,7 +1028,7 @@ export class FoundryGame {
     for (const l of this.flashLights) {
       if (l.life <= 0) {
         l.light.position.copy(this.tmpV);
-        l.light.intensity = this.weaponIdx === 1 ? 90 : 45;
+        l.light.intensity = (this.weaponIdx === 1 ? 90 : 45) * (0.78 + Math.random() * 0.44);
         l.life = 0.07;
         break;
       }
@@ -1279,11 +1286,24 @@ export class FoundryGame {
     this.fireCd = w.cooldown / this.fireMul;
     this.shotsFired++;
     this.heat = Math.min(1, this.heat + (this.weaponIdx === 0 ? 0.16 : 0.4));
-    this.recoilPitch += w.kick * (0.8 + Math.random() * 0.4);
-    this.fovKick += w.fovPunch;
-    this.vmKick = this.weaponIdx === 1 ? 0.16 : 0.07;
-    this.trauma = Math.min(1.4, this.trauma + (this.weaponIdx === 1 ? 0.32 : 0.1));
-    this.recoilYaw += (Math.random() - 0.5) * (this.weaponIdx === 1 ? 0.021 : 0.008);
+    /* ---- realistic recoil: a permanent aim-climb you must pull down against,
+         plus a fast recoverable snap — every shot rolls its own magnitude,
+         horizontal drift and torque, and bracing (ADS) soaks ~35% of it ---- */
+    const kickVar = 0.72 + Math.random() * 0.56; /* 72%–128% power per shot */
+    const brace = 1 - 0.35 * this.aimAmt;
+    const totalKick = w.kick * kickVar * brace;
+    /* permanent displacement — goes into your real aim, so sustained fire climbs */
+    this.pitch = Math.min(1.45, this.pitch + totalKick * 0.58);
+    const sideKick = (Math.random() - 0.5) * 2 * totalKick * (this.weaponIdx === 1 ? 0.62 : 0.45);
+    this.yaw += sideKick * 0.5;
+    /* recoverable visual snap — the per-shot kick you see, then it settles */
+    this.recoilPitch += totalKick * 0.62;
+    this.recoilYaw += sideKick * 0.7;
+    /* camera torque — a gun twists in the hand, a shotgun twists hard */
+    this.recoilRoll += totalKick * (this.weaponIdx === 1 ? 5.5 : 3.2) * (Math.random() < 0.5 ? -1 : 1);
+    this.fovKick += w.fovPunch * (0.75 + Math.random() * 0.5);
+    this.vmKick = (this.weaponIdx === 1 ? 0.16 : 0.07) * kickVar;
+    this.trauma = Math.min(1.4, this.trauma + (this.weaponIdx === 1 ? 0.32 : 0.1) * kickVar);
     if (this.weaponIdx === 0) this.slideT = 1;
     else this.pumpT = 0;
     this.ejectShell();
@@ -1718,6 +1738,7 @@ export class FoundryGame {
     this.heat = Math.max(0, this.heat - dt * 1.3);
     this.recoilPitch *= Math.exp(-10 * dt);
     this.recoilYaw *= Math.exp(-9 * dt);
+    this.recoilRoll *= Math.exp(-8 * dt);
     this.fovKick *= Math.exp(-8 * dt);
     this.vmKick *= Math.exp(-14 * dt);
     if (this.gunLight) this.gunLight.intensity = Math.max(1.1, this.gunLight.intensity * Math.exp(-16 * dt));
@@ -1942,7 +1963,7 @@ export class FoundryGame {
     this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 9);
     this.camera.updateProjectionMatrix();
     this.camera.position.set(this.pos.x + shX, 1.66 + this.pos.y + this.bobY + shY, this.pos.z);
-    this.camera.rotation.set(this.pitch + this.recoilPitch, this.yaw + this.recoilYaw, shR);
+    this.camera.rotation.set(this.pitch + this.recoilPitch, this.yaw + this.recoilYaw, shR + this.recoilRoll);
 
     /* ---------- HUD ---------- */
     const alive = this.enemies.filter((e) => e.state !== "dead").length + this.spawnQueue.length;
