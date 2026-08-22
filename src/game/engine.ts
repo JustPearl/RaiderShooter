@@ -1095,7 +1095,7 @@ export class FoundryGame {
     e.state = "dead";
     e.stateT = 0;
     e.ragdoll = createRagdoll(e.rig, ENEMY_DEFS[e.kind].scale);
-    impulseRagdoll(e.ragdoll, point, dir, force, e.mvx + e.kvx, e.mvz + e.kvz);
+    impulseRagdoll(e.ragdoll, point, dir, force, e.mvx, e.mvz);
     this.removeEnemyFromShootables(e);
     this.kills++;
     this.combo = this.comboT > 0 ? this.combo + 1 : 1;
@@ -2008,6 +2008,13 @@ export class FoundryGame {
       e.dodgeVx *= dk;
       e.dodgeVz *= dk;
     }
+
+    /* true frame velocity from actual displacement — every mover contributes
+       (chase, flanking orbit, pounce lunge, feint hop, bull rush, dodge,
+       knockback), so the ragdoll inherits exactly how the body was moving */
+    const invDt = dt > 0.0001 ? 1 / dt : 0;
+    e.mvx = (e.group.position.x - prevX) * invDt;
+    e.mvz = (e.group.position.z - prevZ) * invDt;
 
     this.animRaider(e, dt, t);
   }
