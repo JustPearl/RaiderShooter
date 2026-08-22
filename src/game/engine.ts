@@ -196,6 +196,32 @@ export class FoundryGame {
   private shotsFired = 0;
   private shotsHit = 0;
 
+  /* gun animation state */
+  private pistolSlide: THREE.Object3D | null = null;
+  private shotgunPump: THREE.Object3D | null = null;
+  private vmEjects: THREE.Object3D[] = [];
+  private slideKick = 0; /* pistol slide reciprocation 0..1 */
+  private pumpT = -1; /* shotgun pump cycle timer, -1 = idle */
+  private recoilYaw = 0; /* horizontal recoil kick */
+  private ads = false; /* right mouse aim held */
+  private adsAmount = 0; /* 0 hip .. 1 aimed */
+  private swayX = 0;
+  private swayY = 0;
+  private swayVX = 0;
+  private swayVY = 0;
+  private idleSwayT = 0;
+
+  /* ejected shell casings */
+  private shells: {
+    mesh: THREE.Mesh;
+    mat: THREE.MeshLambertMaterial;
+    vel: THREE.Vector3;
+    spin: THREE.Vector3;
+    life: number;
+    bounced: boolean;
+  }[] = [];
+  private shellGeo: THREE.BoxGeometry | null = null;
+
   /* world */
   private obstacles: AABB[] = [];
   private shootables: THREE.Mesh[] = [];
@@ -694,6 +720,9 @@ export class FoundryGame {
     const muzzleP = new THREE.Object3D();
     muzzleP.position.set(0, 0.055, -0.3);
     pistol.add(muzzleP);
+    const ejectP = new THREE.Object3D();
+    ejectP.position.set(0.055, 0.06, -0.06);
+    pistol.add(ejectP);
 
     /* shotgun */
     const shotgun = new THREE.Group();
