@@ -93,7 +93,7 @@ export default function App() {
           break;
         case "cleared":
           setCurWave(e.wave);
-          setBanner({ key: uid++, title: `WAVE ${String(e.wave).padStart(2, "0")} CLEARED`, sub: `+${e.bonus} SALVAGE // +10 SHELLS // +12 HP`, tone: "green" });
+          setBanner({ key: uid++, title: `WAVE ${String(e.wave).padStart(2, "0")} CLEARED`, sub: `+${e.bonus} SALVAGE // +10 SHELLS // +24 ROUNDS // +12 HP`, tone: "green" });
           break;
         case "kill": {
           const entry = { id: uid++, text: e.text };
@@ -463,7 +463,7 @@ export default function App() {
                   <span>JUMP</span>
                   <div className="flex gap-1"><span className="keycap">R</span></div>
                   <span>RELOAD</span>
-                  <div className="flex gap-1"><span className="keycap">1</span><span className="keycap">2</span><span className="keycap">WHEEL</span></div>
+                  <div className="flex gap-1"><span className="keycap">1</span><span className="keycap">2</span><span className="keycap">3</span><span className="keycap">WHEEL</span></div>
                   <span>SWAP WEAPON</span>
                   <div className="flex gap-1"><span className="keycap">ESC</span></div>
                   <span>PAUSE</span>
@@ -489,6 +489,17 @@ export default function App() {
                     </svg>
                     <p className="text-[#cdbfa8]">
                       <span className="font-bold text-[#ffe8c8]">M870 BREAKER</span> — 8-pellet scattergun. Shells are scarce. Point-blank deletes.
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <svg width="30" height="18" viewBox="0 0 30 18" className="mt-0.5 shrink-0">
+                      <rect x="3" y="4" width="22" height="6" fill="#8a8f96" />
+                      <rect x="25" y="5" width="4" height="3" fill="#b8a88f" />
+                      <rect x="12" y="10" width="5" height="8" fill="#4a4d52" />
+                      <rect x="4" y="1" width="18" height="2" fill="#b8a88f" />
+                    </svg>
+                    <p className="text-[#cdbfa8]">
+                      <span className="font-bold text-[#ffe8c8]">VK-9 WESPE</span> — western-block prototype. Full-auto 9mm, 24-round grip mag. Drinks ammo, blooms hot.
                     </p>
                   </div>
                   <div className="flex items-start gap-3">

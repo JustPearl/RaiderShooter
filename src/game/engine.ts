@@ -138,6 +138,7 @@ interface WeaponDef {
   reloadTime: number;
   auto: boolean;
   fovPunch: number;
+  bloom: number;
 }
 
 /* ============================== Engine ============================== */
@@ -148,8 +149,11 @@ const ARENA = 31;
 const UP = new THREE.Vector3(0, 1, 0);
 
 const WEAPONS: WeaponDef[] = [
-  { name: "P-9 SCRAPLOCK", tag: "P-9", dmg: 34, pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2 },
-  { name: "M870 BREAKER", tag: "BREAKER", dmg: 15, pellets: 8, spread: 0.055, kick: 0.06, cooldown: 0.82, magSize: 6, reloadTime: 0.5, auto: false, fovPunch: 5 },
+  { name: "P-9 SCRAPLOCK", tag: "P-9", dmg: 34, pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2, bloom: 0.052 },
+  { name: "M870 BREAKER", tag: "BREAKER", dmg: 15, pellets: 8, spread: 0.055, kick: 0.06, cooldown: 0.82, magSize: 6, reloadTime: 0.5, auto: false, fovPunch: 5, bloom: 0.02 },
+  /* western-block prototype SMG — full-auto volume at the price of ammo,
+     a long mag swap and the worst heat bloom of the three */
+  { name: "VK-9 WESPE", tag: "VK-9", dmg: 17, pellets: 1, spread: 0.013, kick: 0.0075, cooldown: 0.082, magSize: 24, reloadTime: 1.4, auto: true, fovPunch: 0.5, bloom: 0.09 },
 ];
 
 /* ============================== Skill pool ============================== */
@@ -241,8 +245,8 @@ export class FoundryGame {
 
   /* weapons */
   private weaponIdx = 0;
-  private mags = [12, 6];
-  private reserves = [Infinity, 24];
+  private mags = [12, 6, 24];
+  private reserves = [Infinity, 24, 96];
   private fireCd = 0;
   private wState: "idle" | "lowering" | "raising" | "reloading" = "idle";
   private wT = 0;
@@ -255,6 +259,7 @@ export class FoundryGame {
   private vmKick = 0;
   private vmSlide: THREE.Mesh | null = null;
   private vmPump: THREE.Mesh | null = null;
+  private vmBolt: THREE.Mesh | null = null;
   private slideT = 0;
   private pumpT = -1;
   private rackT = -1;
@@ -378,6 +383,7 @@ export class FoundryGame {
     if (this.phase !== "playing") return;
     if (e.code === "Digit1") this.switchTo(0);
     if (e.code === "Digit2") this.switchTo(1);
+    if (e.code === "Digit3") this.switchTo(2);
     if (e.code === "KeyR") this.startReload();
   };
   private onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.code);
@@ -398,7 +404,7 @@ export class FoundryGame {
     if (e.button === 2) this.aiming = false;
   };
   private onWheel = (e: WheelEvent) => {
-    if (this.phase === "playing") this.switchTo(this.weaponIdx === 0 ? 1 : 0);
+    if (this.phase === "playing") this.switchTo((this.weaponIdx + 1) % WEAPONS.length);
   };
   private onCtx = (e: Event) => e.preventDefault();
   private onDocCtx = (e: Event) => e.preventDefault();
@@ -494,8 +500,8 @@ export class FoundryGame {
     this.yaw = Math.PI;
     this.pitch = 0;
     this.weaponIdx = 0;
-    this.mags = [WEAPONS[0].magSize, WEAPONS[1].magSize];
-    this.reserves = [Infinity, 24];
+    this.mags = [WEAPONS[0].magSize, WEAPONS[1].magSize, WEAPONS[2].magSize];
+    this.reserves = [Infinity, 24, 96];
     this.wState = "idle";
     this.fireCd = 0;
     this.heat = 0;
@@ -850,10 +856,73 @@ export class FoundryGame {
     port.position.set(0.045, 0.02, 0.1);
     shotgun.add(port);
 
+    /* VK-9 WESPE — western-block prototype SMG: stamped-steel box receiver,
+       grip magazine, folding wire stock, open-bolt cover up top */
+    const smg = new THREE.Group();
+    const smgBody = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.1, 0.42), darkMetal);
+    smgBody.position.set(0, 0.03, -0.02);
+    smg.add(smgBody);
+    const topCover = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.028, 0.4), metal);
+    topCover.position.set(0, 0.092, -0.03);
+    smg.add(topCover);
+    /* stamped ribs along the receiver */
+    for (let i = 0; i < 3; i++) {
+      const rib = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.012, 0.03), metal);
+      rib.position.set(0, 0.0, -0.12 + i * 0.09);
+      smg.add(rib);
+    }
+    /* reciprocating bolt cover + charging handle */
+    const bolt = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, 0.1), new THREE.MeshLambertMaterial({ color: "#565c63", flatShading: true }));
+    bolt.position.set(0, 0.113, -0.12);
+    smg.add(bolt);
+    const chgHandle = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.012, 0.07), darkMetal);
+    chgHandle.position.set(0.045, 0.113, -0.12);
+    smg.add(chgHandle);
+    /* barrel shroud + front sight */
+    const shroud = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.052, 0.2), metal);
+    shroud.position.set(0, 0.045, -0.32);
+    smg.add(shroud);
+    const fSight = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.045, 0.014), darkMetal);
+    fSight.position.set(0, 0.095, -0.4);
+    smg.add(fSight);
+    const muzzleK = new THREE.Object3D();
+    muzzleK.position.set(0, 0.045, -0.435);
+    smg.add(muzzleK);
+    /* grip with the magazine inside — the UZI silhouette */
+    const smgGrip = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.2, 0.08), new THREE.MeshLambertMaterial({ color: "#22262b", flatShading: true }));
+    smgGrip.position.set(0, -0.09, 0.03);
+    smgGrip.rotation.x = 0.14;
+    smg.add(smgGrip);
+    const magBase = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.06, 0.07), darkMetal);
+    magBase.position.set(0, -0.21, 0.045);
+    magBase.rotation.x = 0.14;
+    smg.add(magBase);
+    /* folded wire stock over the top */
+    const wireA = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.012, 0.34), metal);
+    wireA.position.set(-0.028, 0.135, 0.06);
+    smg.add(wireA);
+    const wireB = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.012, 0.34), metal);
+    wireB.position.set(0.028, 0.135, 0.06);
+    smg.add(wireB);
+    const wireEnd = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.05, 0.014), metal);
+    wireEnd.position.set(0, 0.135, 0.23);
+    smg.add(wireEnd);
+    /* rear sight + prototype tag */
+    const rSight = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 0.02), darkMetal);
+    rSight.position.set(0, 0.095, 0.14);
+    smg.add(rSight);
+    const tag = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.03, 0.09), new THREE.MeshBasicMaterial({ color: "#ffb42e" }));
+    tag.position.set(0.048, 0.03, 0.02);
+    smg.add(tag);
+    /* ejection port */
+    const portK = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.05, 0.11), new THREE.MeshBasicMaterial({ color: "#0b0b0d" }));
+    portK.position.set(0.048, 0.05, -0.08);
+    smg.add(portK);
+
     const gunLight = new THREE.PointLight(new THREE.Color("#ffe8c8"), 1.1, 2.4, 1.8);
     gunLight.position.set(0.1, 0.1, -0.2);
 
-    for (const vm of [pistol, shotgun]) {
+    for (const vm of [pistol, shotgun, smg]) {
       vm.position.copy(this.vmBase);
       vm.visible = false;
       this.camera.add(vm);
@@ -861,10 +930,11 @@ export class FoundryGame {
     pistol.visible = true;
     pistol.add(gunLight);
     this.scene.add(this.camera);
-    this.vmGroups = [pistol, shotgun];
-    this.vmMuzzles = [muzzleP, muzzleS];
+    this.vmGroups = [pistol, shotgun, smg];
+    this.vmMuzzles = [muzzleP, muzzleS, muzzleK];
     this.vmSlide = slide;
     this.vmPump = pump;
+    this.vmBolt = bolt;
     this.gunLight = gunLight;
   }
 
@@ -922,7 +992,7 @@ export class FoundryGame {
     /* ejected brass casings */
     const shellGeo = new THREE.CylinderGeometry(0.013, 0.013, 0.045, 6);
     const shellMat = new THREE.MeshLambertMaterial({ color: "#c9a24a", flatShading: true });
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < 40; i++) {
       const m = new THREE.Mesh(shellGeo, shellMat);
       m.visible = false;
       this.scene.add(m);
@@ -1021,7 +1091,7 @@ export class FoundryGame {
         this.tmpV2.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
         f.mesh.position.copy(this.tmpV).addScaledVector(this.tmpV2, 0.04);
         f.mesh.rotation.z = Math.random() * Math.PI * 2;
-        const s = (this.weaponIdx === 1 ? 1.5 : 0.85) * (0.75 + Math.random() * 0.5);
+        const s = (this.weaponIdx === 1 ? 1.5 : this.weaponIdx === 2 ? 0.62 : 0.85) * (0.75 + Math.random() * 0.5);
         f.mesh.scale.set(s * (0.8 + Math.random() * 0.4), s * (0.8 + Math.random() * 0.4), s);
         f.mesh.lookAt(this.camera.getWorldPosition(this.tmpV2));
         f.life = 0.05;
@@ -1261,7 +1331,7 @@ export class FoundryGame {
     const w = WEAPONS[this.weaponIdx];
     /* quadratic heat bloom — trigger discipline keeps it tight,
        dumping the mag from the hip opens the cone wide */
-    const bloom = this.heat * this.heat * 0.052;
+    const bloom = this.heat * this.heat * w.bloom;
     const base = w.spread * (1 - 0.45 * this.aimAmt);
     const speed = Math.hypot(this.vel.x, this.vel.z);
     let s = base + bloom * (1 - 0.85 * this.aimAmt) + speed * 0.0035;
@@ -1309,16 +1379,18 @@ export class FoundryGame {
     this.vmKick = (this.weaponIdx === 1 ? 0.19 : 0.085) * kickVar;
     this.trauma = Math.min(1.4, this.trauma + (this.weaponIdx === 1 ? 0.26 : 0.08) * kickVar);
     if (this.weaponIdx === 0) this.slideT = 1;
-    else this.pumpT = 0;
+    else if (this.weaponIdx === 1) this.pumpT = 0;
+    else this.slideT = 1; /* open bolt reciprocates like the pistol slide */
     this.ejectShell();
-    if (this.gunLight) this.gunLight.intensity = this.weaponIdx === 1 ? 26 : 14;
+    if (this.gunLight) this.gunLight.intensity = this.weaponIdx === 1 ? 26 : this.weaponIdx === 2 ? 9 : 14;
     if (this.weaponIdx === 1) sfx.shotgun();
+    else if (this.weaponIdx === 2) sfx.smg();
     else sfx.pistol();
     this.notifyShot(this.weaponIdx === 1);
     this.spawnMuzzleFlash();
     /* lingering powder smoke at the muzzle */
     this.vmMuzzles[this.weaponIdx].getWorldPosition(this.tmpV3);
-    this.spawnParticles(this.tmpV3.clone(), this.weaponIdx === 1 ? 6 : 3, ["#6e675e", "#4c463e"], 0.7, 0.55, -0.5);
+    this.spawnParticles(this.tmpV3.clone(), this.weaponIdx === 1 ? 6 : this.weaponIdx === 2 ? 2 : 3, ["#6e675e", "#4c463e"], 0.7, 0.55, -0.5);
 
     const spread = this.currentSpread();
     const camDir = new THREE.Vector3();
@@ -1350,8 +1422,8 @@ export class FoundryGame {
           if (data.kind === "enemy") {
             anyHit = true;
             const head = hits[0].point.y - data.enemy.group.position.y > 1.42 * ENEMY_DEFS[data.enemy.kind as EnemyKind].scale;
-            const knock = this.weaponIdx === 1 ? 6.5 : 1.4;
-            this.damageEnemy(data.enemy, dmg * (head ? 2 : 1), hits[0].point, head || crit, knock, dir, w.tag, this.weaponIdx === 1 ? 11 : 5.5);
+            const knock = this.weaponIdx === 1 ? 6.5 : this.weaponIdx === 2 ? 0.9 : 1.4;
+            this.damageEnemy(data.enemy, dmg * (head ? 2 : 1), hits[0].point, head || crit, knock, dir, w.tag, this.weaponIdx === 1 ? 11 : this.weaponIdx === 2 ? 4.2 : 5.5);
           } else if (data.kind === "barrel") {
             anyHit = true;
             this.hitBarrel(data.barrel, w.tag);
@@ -1361,7 +1433,7 @@ export class FoundryGame {
           }
         }
       }
-      this.spawnTracer(origin, hitPoint, this.weaponIdx === 1 ? "#ffc37e" : "#ffe8b0");
+      this.spawnTracer(origin, hitPoint, this.weaponIdx === 1 ? "#ffc37e" : this.weaponIdx === 2 ? "#ffe08f" : "#ffe8b0");
     }
     if (anyHit) this.shotsHit++;
     return true;
@@ -1488,6 +1560,7 @@ export class FoundryGame {
     this.score += bonus;
     this.hp = Math.min(this.maxHp, this.hp + 12);
     this.reserves[1] = Math.min(48, this.reserves[1] + 10);
+    this.reserves[2] = Math.min(144, this.reserves[2] + 24);
     this.onEvent({ type: "cleared", wave: this.wave, bonus });
     sfx.waveClear();
     if (this.wave % 3 === 0) this.offerDraft();
@@ -1781,11 +1854,11 @@ export class FoundryGame {
       } else {
         this.wT -= dt;
         if (this.wT <= 0) {
-          const need = w.magSize - this.mags[0];
-          this.mags[0] = w.magSize;
+          const take = Math.min(w.magSize - this.mags[this.weaponIdx], this.reserves[this.weaponIdx]);
+          this.mags[this.weaponIdx] += take;
+          if (isFinite(this.reserves[this.weaponIdx])) this.reserves[this.weaponIdx] -= take;
           sfx.reload(2);
           this.wState = "idle";
-          void need;
         }
       }
     }
@@ -1851,7 +1924,7 @@ export class FoundryGame {
         vrx = -0.85 * dip;
         vrz += 0.5 * dip;
         vx += 0.05 * dip;
-      } else {
+      } else if (this.weaponIdx === 1) {
         /* shotgun: nose up, each shell shoved in with a wrist twist */
         vy -= 0.14;
         vrx = -0.5;
@@ -1859,6 +1932,14 @@ export class FoundryGame {
         vy -= 0.05 * shellPh;
         vrz += 0.3 * shellPh;
         vx -= 0.03 * shellPh;
+      } else {
+        /* SMG: cant the gun out and yank the grip mag */
+        const prog = 1 - this.wT / this.effReload(w);
+        const dip = Math.sin(prog * Math.PI);
+        vy -= 0.26 * dip;
+        vrx = -0.45 * dip;
+        vrz = -0.55 * dip;
+        vx += 0.09 * dip;
       }
     }
 
@@ -1878,6 +1959,12 @@ export class FoundryGame {
       const s = this.slideT;
       const back = s > 0.55 ? ((s - 0.55) / 0.45) * 0.055 : Math.sin((s / 0.55) * Math.PI) * 0.02;
       this.vmSlide.position.z = -0.08 + back;
+    }
+    if (this.vmBolt) {
+      /* open bolt slams back and returns — shorter, harsher stroke than the slide */
+      const s = this.slideT;
+      const back = s > 0.5 ? ((s - 0.5) / 0.5) * 0.07 : Math.sin((s / 0.5) * Math.PI) * 0.014;
+      this.vmBolt.position.z = -0.12 + back;
     }
     if (this.vmPump) {
       let pz = 0;
@@ -1941,7 +2028,8 @@ export class FoundryGame {
           this.onEvent({ type: "pickup", text: "+25 HP" });
         } else {
           this.reserves[1] = Math.min(48, this.reserves[1] + 6);
-          this.onEvent({ type: "pickup", text: "+6 SHELLS" });
+          this.reserves[2] = Math.min(144, this.reserves[2] + 20);
+          this.onEvent({ type: "pickup", text: "+6 SHELLS // +20 ROUNDS" });
         }
         sfx.pickup(p.kind);
         p.life = 0;
@@ -1977,7 +2065,7 @@ export class FoundryGame {
       hp: Math.ceil(this.hp),
       maxHp: this.maxHp,
       ammo: this.mags[this.weaponIdx],
-      reserve: this.weaponIdx === 0 ? -1 : this.reserves[1],
+      reserve: this.weaponIdx === 0 ? -1 : this.reserves[this.weaponIdx],
       weapon: this.weaponIdx,
       weaponName: w.name,
       wave: this.wave,

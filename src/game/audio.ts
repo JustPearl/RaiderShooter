@@ -92,6 +92,15 @@ export class SFX {
     this.noise(0.07, { freq: 620, gain: 0.055 * this.j(1), delay: 0.1 });
   }
 
+  smg() {
+    /* tight open-bolt 9mm — shorter and snappier than the sidearm */
+    this.noise(0.026, { type: "bandpass", freq: 3600, q: 0.7, gain: this.j(0.34) });
+    this.noise(0.055, { freq: 3000, slideTo: 520, gain: this.j(0.3) });
+    this.tone(0.045, { type: "sine", freq: 175, slideTo: 62, gain: this.j(0.15) });
+    /* bolt clack trailing the crack */
+    this.noise(0.02, { type: "bandpass", freq: 2150, q: 8, gain: 0.06, delay: 0.042 });
+  }
+
   shotgun() {
     /* crack — same band-limited impulse recipe, wider */
     this.noise(0.06, { hp: 260, freq: 4000 * this.j(1), gain: this.j(0.48) });
