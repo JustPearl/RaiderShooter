@@ -261,7 +261,6 @@ export class FoundryGame {
   private aimAmt = 0;
   private aiming = false;
   private recoilYaw = 0;
-  private recoilRoll = 0;
   private gunLight: THREE.PointLight | null = null;
   private swayX = 0;
   private swayY = 0;
@@ -1299,8 +1298,6 @@ export class FoundryGame {
     /* recoverable visual snap — the per-shot kick you see, then it settles */
     this.recoilPitch += totalKick * 0.62;
     this.recoilYaw += sideKick * 0.7;
-    /* camera torque — a gun twists in the hand, a shotgun twists hard */
-    this.recoilRoll += totalKick * (this.weaponIdx === 1 ? 5.5 : 3.2) * (Math.random() < 0.5 ? -1 : 1);
     this.fovKick += w.fovPunch * (0.75 + Math.random() * 0.5);
     this.vmKick = (this.weaponIdx === 1 ? 0.16 : 0.07) * kickVar;
     this.trauma = Math.min(1.4, this.trauma + (this.weaponIdx === 1 ? 0.32 : 0.1) * kickVar);
@@ -1738,7 +1735,6 @@ export class FoundryGame {
     this.heat = Math.max(0, this.heat - dt * 1.3);
     this.recoilPitch *= Math.exp(-10 * dt);
     this.recoilYaw *= Math.exp(-9 * dt);
-    this.recoilRoll *= Math.exp(-8 * dt);
     this.fovKick *= Math.exp(-8 * dt);
     this.vmKick *= Math.exp(-14 * dt);
     if (this.gunLight) this.gunLight.intensity = Math.max(1.1, this.gunLight.intensity * Math.exp(-16 * dt));
@@ -1963,7 +1959,7 @@ export class FoundryGame {
     this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 9);
     this.camera.updateProjectionMatrix();
     this.camera.position.set(this.pos.x + shX, 1.66 + this.pos.y + this.bobY + shY, this.pos.z);
-    this.camera.rotation.set(this.pitch + this.recoilPitch, this.yaw + this.recoilYaw, shR + this.recoilRoll);
+    this.camera.rotation.set(this.pitch + this.recoilPitch, this.yaw + this.recoilYaw, shR);
 
     /* ---------- HUD ---------- */
     const alive = this.enemies.filter((e) => e.state !== "dead").length + this.spawnQueue.length;
