@@ -24,8 +24,10 @@ export interface RaiderRig {
   head: THREE.Bone;
   shL: THREE.Bone;
   elL: THREE.Bone;
+  handL: THREE.Bone;
   shR: THREE.Bone;
   elR: THREE.Bone;
+  handR: THREE.Bone;
   hipL: THREE.Bone;
   kneeL: THREE.Bone;
   ankleL: THREE.Bone;
@@ -282,8 +284,10 @@ export function buildRaiderRig(kind: RaiderKind): RaiderRig {
     head,
     shL: armL.sh,
     elL: armL.el,
+    handL: armL.hand,
     shR: armR.sh,
     elR: armR.el,
+    handR: armR.hand,
     hipL: legL.hip,
     kneeL: legL.knee,
     ankleL: legL.ankle,

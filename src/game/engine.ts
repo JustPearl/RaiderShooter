@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { sfx } from "./audio";
 import { buildRaiderRig, updateRaiderAnim, WINDUP_TIME, type RaiderRig } from "./raider";
+import { createRagdoll, impulseRagdoll, stepRagdoll, type Ragdoll } from "./ragdoll";
 import {
   floorTexture,
   wallTexture,
@@ -79,6 +80,9 @@ interface Enemy {
   walkT: number;
   sinkT: number;
   wobble: number;
+  mvx: number;
+  mvz: number;
+  ragdoll: Ragdoll | null;
 }
 
 interface Barrel {
@@ -889,9 +893,12 @@ export class FoundryGame {
       hitstun: 0,
       kvx: 0,
       kvz: 0,
-      walkT: Math.random() * 10,
+      walkT: Math.random() * Math.PI * 2,
       sinkT: 0,
       wobble: Math.random() * Math.PI * 2,
+      mvx: 0,
+      mvz: 0,
+      ragdoll: null,
     };
     hitData.enemy = enemy;
     g.traverse((o) => {
@@ -929,22 +936,24 @@ export class FoundryGame {
     }
   }
 
-  private damageEnemy(e: Enemy, dmg: number, point: THREE.Vector3, head: boolean, knock: number, dirX: number, dirZ: number, weaponTag: string) {
+  private damageEnemy(e: Enemy, dmg: number, point: THREE.Vector3, head: boolean, knock: number, dir: THREE.Vector3, weaponTag: string, force: number) {
     if (e.state === "dead") return;
     e.hp -= dmg;
     e.flash = 1;
     e.hitstun = 0.13;
-    e.kvx += dirX * knock;
-    e.kvz += dirZ * knock;
+    e.kvx += dir.x * knock;
+    e.kvz += dir.z * knock;
     this.spawnParticles(point, head ? 12 : 7, ["#c42418", "#8a160c", "#ffb42e"], 4.5, 0.45, 10);
     sfx.hitEnemy(head);
     this.onEvent({ type: "hitmarker", head, kill: e.hp <= 0 });
-    if (e.hp <= 0) this.killEnemy(e, weaponTag, head);
+    if (e.hp <= 0) this.killEnemy(e, weaponTag, head, point, dir, force * (head ? 1.55 : 1));
   }
 
-  private killEnemy(e: Enemy, weaponTag: string, head: boolean) {
+  private killEnemy(e: Enemy, weaponTag: string, head: boolean, point: THREE.Vector3, dir: THREE.Vector3, force: number) {
     e.state = "dead";
     e.stateT = 0;
+    e.ragdoll = createRagdoll(e.rig, ENEMY_DEFS[e.kind].scale);
+    impulseRagdoll(e.ragdoll, point, dir, force, e.mvx + e.kvx, e.mvz + e.kvz);
     this.removeEnemyFromShootables(e);
     this.kills++;
     this.combo = this.comboT > 0 ? this.combo + 1 : 1;
@@ -1073,7 +1082,7 @@ export class FoundryGame {
             anyHit = true;
             const head = hits[0].point.y - data.enemy.group.position.y > 1.42 * ENEMY_DEFS[data.enemy.kind as EnemyKind].scale;
             const knock = this.weaponIdx === 1 ? 6.5 : 1.4;
-            this.damageEnemy(data.enemy, w.dmg * (head ? 2 : 1), hits[0].point, head, knock, dir.x, dir.z, w.tag);
+            this.damageEnemy(data.enemy, w.dmg * (head ? 2 : 1), hits[0].point, head, knock, dir, w.tag, this.weaponIdx === 1 ? 11 : 5.5);
           } else if (data.kind === "barrel") {
             anyHit = true;
             this.hitBarrel(data.barrel, w.tag);
@@ -1120,7 +1129,10 @@ export class FoundryGame {
         const fall = 1 - d / R;
         const dirX = (e.group.position.x - pos.x) / (d || 1);
         const dirZ = (e.group.position.z - pos.z) / (d || 1);
-        this.damageEnemy(e, 150 * fall + 40, e.group.position.clone().add(this.tmpV3.set(0, 1, 0)), false, 12 * fall, dirX, dirZ, "BARREL");
+        const dir3 = new THREE.Vector3(dirX, 0.6 * fall + 0.25, dirZ).normalize();
+        const pt3 = e.group.position.clone();
+        pt3.y += 1.05;
+        this.damageEnemy(e, 150 * fall + 40, pt3, false, 12 * fall, dir3, "BARREL", 15 * fall + 8);
       }
     }
     const pd = this.pos.distanceTo(pos);
@@ -1417,7 +1429,7 @@ export class FoundryGame {
     /* ---------- enemies ---------- */
     for (const e of this.enemies) this.updateEnemy(e, dt, t);
     this.enemies = this.enemies.filter((e) => {
-      if (e.state === "dead" && e.sinkT > 4.2) {
+      if (e.state === "dead" && e.sinkT > 1.7) {
         this.scene.remove(e.group);
         return false;
       }
@@ -1504,13 +1516,19 @@ export class FoundryGame {
 
     if (e.state === "dead") {
       e.stateT += dt;
-      const fall = Math.min(1, e.stateT * 2.6);
-      e.group.rotation.x = (-Math.PI / 2) * fall * fall;
-      if (e.stateT > 2.6) {
-        e.sinkT += dt;
-        e.group.position.y -= dt * 0.8;
+      if (e.ragdoll) {
+        e.ragdoll.deadT += dt;
+        if (e.ragdoll.deadT > 3.1) {
+          /* the foundry floor swallows its dead */
+          e.ragdoll.sink = true;
+          e.sinkT += dt;
+          for (const pt of e.ragdoll.pts) {
+            pt.p.y -= dt * 1.15;
+            pt.pp.y -= dt * 1.15;
+          }
+        }
+        stepRagdoll(e.ragdoll, e.group, dt, this.obstacles);
       }
-      this.animRaider(e, dt, t);
       return;
     }
 
@@ -1545,8 +1563,10 @@ export class FoundryGame {
       const mz = dirZ + dirX * wob;
       const ml = Math.hypot(mx, mz) || 1;
       const sp = e.speed * stunMul;
-      e.group.position.x += (mx / ml) * sp * dt + e.kvx * dt;
-      e.group.position.z += (mz / ml) * sp * dt + e.kvz * dt;
+      e.mvx = (mx / ml) * sp;
+      e.mvz = (mz / ml) * sp;
+      e.group.position.x += e.mvx * dt + e.kvx * dt;
+      e.group.position.z += e.mvz * dt + e.kvz * dt;
       e.walkT += dt * sp * 1.9;
 
       /* separation from other enemies */
