@@ -507,7 +507,6 @@ export class FoundryGame {
     this.trauma = 0;
     this.recoilPitch = 0;
     this.recoilYaw = 0;
-    this.recoilRoll = 0;
     for (const e of this.enemies) this.scene.remove(e.group);
     this.enemies = [];
     this.shootables = this.shootables.filter((m) => m.userData.hit?.kind !== "enemy");
@@ -535,7 +534,6 @@ export class FoundryGame {
     this.pumpT = -1;
     this.rackT = -1;
     this.recoilYaw = 0;
-    this.recoilRoll = 0;
     this.startIntermission();
   }
 
@@ -1255,11 +1253,13 @@ export class FoundryGame {
 
   private currentSpread(): number {
     const w = WEAPONS[this.weaponIdx];
-    let s = w.spread + this.heat * 0.02;
+    /* quadratic heat bloom — trigger discipline keeps it tight,
+       dumping the mag from the hip opens the cone wide */
+    const bloom = this.heat * this.heat * 0.052;
+    const base = w.spread * (1 - 0.45 * this.aimAmt);
     const speed = Math.hypot(this.vel.x, this.vel.z);
-    s += speed * 0.0035;
-    if (!this.grounded) s += 0.02;
-    s *= 1 - 0.55 * this.aimAmt; /* ADS tightens the cone */
+    let s = base + bloom * (1 - 0.85 * this.aimAmt) + speed * 0.0035;
+    if (!this.grounded) s += 0.02 * (1 - 0.5 * this.aimAmt);
     return s;
   }
 
@@ -1284,23 +1284,23 @@ export class FoundryGame {
     this.mags[this.weaponIdx]--;
     this.fireCd = w.cooldown / this.fireMul;
     this.shotsFired++;
-    this.heat = Math.min(1, this.heat + (this.weaponIdx === 0 ? 0.16 : 0.4));
+    this.heat = Math.min(1, this.heat + (this.weaponIdx === 0 ? 0.36 : 0.5));
     /* ---- realistic recoil: a permanent aim-climb you must pull down against,
          plus a fast recoverable snap — every shot rolls its own magnitude,
          horizontal drift and torque, and bracing (ADS) soaks ~35% of it ---- */
-    const kickVar = 0.72 + Math.random() * 0.56; /* 72%–128% power per shot */
+    const kickVar = 0.85 + Math.random() * 0.6; /* 85%–145% power per shot */
     const brace = 1 - 0.35 * this.aimAmt;
     const totalKick = w.kick * kickVar * brace;
     /* permanent displacement — goes into your real aim, so sustained fire climbs */
-    this.pitch = Math.min(1.45, this.pitch + totalKick * 0.58);
-    const sideKick = (Math.random() - 0.5) * 2 * totalKick * (this.weaponIdx === 1 ? 0.62 : 0.45);
-    this.yaw += sideKick * 0.5;
+    this.pitch = Math.min(1.45, this.pitch + totalKick * 0.72);
+    const sideKick = (Math.random() - 0.5) * 2 * totalKick * (this.weaponIdx === 1 ? 0.7 : 0.52);
+    this.yaw += sideKick * 0.55;
     /* recoverable visual snap — the per-shot kick you see, then it settles */
-    this.recoilPitch += totalKick * 0.62;
-    this.recoilYaw += sideKick * 0.7;
-    this.fovKick += w.fovPunch * (0.75 + Math.random() * 0.5);
-    this.vmKick = (this.weaponIdx === 1 ? 0.16 : 0.07) * kickVar;
-    this.trauma = Math.min(1.4, this.trauma + (this.weaponIdx === 1 ? 0.32 : 0.1) * kickVar);
+    this.recoilPitch += totalKick * 0.85;
+    this.recoilYaw += sideKick * 0.8;
+    this.fovKick += w.fovPunch * (0.95 + Math.random() * 0.55);
+    this.vmKick = (this.weaponIdx === 1 ? 0.19 : 0.085) * kickVar;
+    this.trauma = Math.min(1.4, this.trauma + (this.weaponIdx === 1 ? 0.36 : 0.12) * kickVar);
     if (this.weaponIdx === 0) this.slideT = 1;
     else this.pumpT = 0;
     this.ejectShell();
@@ -1732,7 +1732,7 @@ export class FoundryGame {
 
     /* ---------- weapons ---------- */
     this.fireCd -= dt;
-    this.heat = Math.max(0, this.heat - dt * 1.3);
+    this.heat = Math.max(0, this.heat - dt * 0.85);
     this.recoilPitch *= Math.exp(-10 * dt);
     this.recoilYaw *= Math.exp(-9 * dt);
     this.fovKick *= Math.exp(-8 * dt);
