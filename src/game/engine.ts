@@ -1344,10 +1344,11 @@ export class FoundryGame {
       ix /= il;
       iz /= il;
     }
+    /* rotate input vector by yaw (must match camera Ry(yaw), order YXZ) */
     const sin = Math.sin(this.yaw);
     const cos = Math.cos(this.yaw);
-    const wx = ix * cos - iz * sin;
-    const wz = ix * sin + iz * cos;
+    const wx = ix * cos + iz * sin;
+    const wz = -ix * sin + iz * cos;
 
     const accel = this.grounded ? 14 : 5;
     this.vel.x += (wx * speed - this.vel.x) * Math.min(1, accel * dt);
