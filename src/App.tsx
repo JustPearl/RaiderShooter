@@ -23,6 +23,7 @@ export default function App() {
   const [killFeed, setKillFeed] = useState<KillEntry[]>([]);
   const [banner, setBanner] = useState<Banner | null>(null);
   const [hitmark, setHitmark] = useState<{ key: number; head: boolean; kill: boolean } | null>(null);
+  const hitTimer = useRef(0);
   const [toast, setToast] = useState<{ key: number; text: string } | null>(null);
   const [weapon, setWeapon] = useState(0);
 
@@ -63,6 +64,8 @@ export default function App() {
           break;
         case "hitmarker":
           setHitmark({ key: uid++, head: e.head, kill: e.kill });
+          window.clearTimeout(hitTimer.current);
+          hitTimer.current = window.setTimeout(() => setHitmark(null), 340);
           break;
         case "damage":
           if (dmgRef.current) {

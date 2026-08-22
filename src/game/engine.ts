@@ -1370,7 +1370,7 @@ export class FoundryGame {
 
     /* apply view immediately so firing rays match the on-screen aim */
     this.camera.rotation.set(this.pitch + this.recoilPitch, this.yaw, 0);
-    this.camera.position.set(this.pos.x, 1.66 + this.bobY, this.pos.z);
+    this.camera.position.set(this.pos.x, 1.66 + this.pos.y + this.bobY, this.pos.z);
 
     /* head bob + footsteps */
     const hSpeed = Math.hypot(this.vel.x, this.vel.z);
@@ -1532,7 +1532,7 @@ export class FoundryGame {
     const targetFov = (sprint && hSpeed > 4 ? 80 : 75) + this.fovKick;
     this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 9);
     this.camera.updateProjectionMatrix();
-    this.camera.position.set(this.pos.x + shX, 1.66 + this.bobY + shY, this.pos.z);
+    this.camera.position.set(this.pos.x + shX, 1.66 + this.pos.y + this.bobY + shY, this.pos.z);
     this.camera.rotation.set(this.pitch + this.recoilPitch, this.yaw, shR);
 
     /* ---------- HUD ---------- */
@@ -1875,7 +1875,7 @@ export class FoundryGame {
       t,
       dt,
       yawLocal: yl,
-      pitchToPlayer: Math.atan2(1.66 - headY, Math.max(1.2, dist)),
+      pitchToPlayer: Math.atan2(1.66 + this.pos.y - headY, Math.max(1.2, dist)),
       hitstun: Math.max(0, e.hitstun),
       feint: e.feintT > 0 ? Math.sin((1 - e.feintT / 0.22) * Math.PI) : 0,
       dodgeLean: e.dodgeT > 0 ? e.dodgeDir * Math.min(1, e.dodgeT / 0.18) : 0,
