@@ -857,7 +857,7 @@ export class FoundryGame {
     shotgun.add(port);
 
     /* VK-9 WESPE — western-block prototype SMG: stamped-steel box receiver,
-       grip magazine, folding wire stock, open-bolt cover up top */
+       grip magazine, open-bolt cover up top — bare receiver, no stock */
     const smg = new THREE.Group();
     const smgBody = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.1, 0.42), darkMetal);
     smgBody.position.set(0, 0.03, -0.02);
@@ -897,16 +897,6 @@ export class FoundryGame {
     magBase.position.set(0, -0.21, 0.045);
     magBase.rotation.x = 0.14;
     smg.add(magBase);
-    /* folded wire stock over the top */
-    const wireA = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.012, 0.34), metal);
-    wireA.position.set(-0.028, 0.135, 0.06);
-    smg.add(wireA);
-    const wireB = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.012, 0.34), metal);
-    wireB.position.set(0.028, 0.135, 0.06);
-    smg.add(wireB);
-    const wireEnd = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.05, 0.014), metal);
-    wireEnd.position.set(0, 0.135, 0.23);
-    smg.add(wireEnd);
     /* rear sight + prototype tag */
     const rSight = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 0.02), darkMetal);
     rSight.position.set(0, 0.095, 0.14);

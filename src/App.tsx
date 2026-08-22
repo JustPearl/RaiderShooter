@@ -496,7 +496,6 @@ export default function App() {
                       <rect x="3" y="4" width="22" height="6" fill="#8a8f96" />
                       <rect x="25" y="5" width="4" height="3" fill="#b8a88f" />
                       <rect x="12" y="10" width="5" height="8" fill="#4a4d52" />
-                      <rect x="4" y="1" width="18" height="2" fill="#b8a88f" />
                     </svg>
                     <p className="text-[#cdbfa8]">
                       <span className="font-bold text-[#ffe8c8]">VK-9 WESPE</span> — western-block prototype. Full-auto 9mm, 24-round grip mag. Drinks ammo, blooms hot.
