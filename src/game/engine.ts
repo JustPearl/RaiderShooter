@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { sfx } from "./audio";
+import { buildRaiderRig, updateRaiderAnim, WINDUP_TIME, type RaiderRig } from "./raider";
 import {
   floorTexture,
   wallTexture,
@@ -60,12 +61,7 @@ type EnemyKind = "scrapper" | "runner" | "brute";
 
 interface Enemy {
   group: THREE.Group;
-  legL: THREE.Group;
-  legR: THREE.Group;
-  armL: THREE.Group;
-  armR: THREE.Group;
-  torsoMat: THREE.MeshLambertMaterial;
-  eyeMat: THREE.MeshBasicMaterial;
+  rig: RaiderRig;
   kind: EnemyKind;
   hp: number;
   maxHp: number;
@@ -129,6 +125,8 @@ const ENEMY_DEFS: Record<EnemyKind, { hp: number; speed: number; dmg: number; ra
   brute: { hp: 270, speed: 2.35, dmg: 22, range: 2.35, score: 400, scale: 1.45 },
 };
 
+const FLASH_WHITE = new THREE.Color("#ffffff");
+
 export class FoundryGame {
   private canvas: HTMLCanvasElement;
   private onEvent: (e: GameEvent) => void;
@@ -188,6 +186,8 @@ export class FoundryGame {
   private lamps: { light: THREE.PointLight; base: number; broken: boolean; seed: number }[] = [];
   private fans: THREE.Group[] = [];
   private gateLights: THREE.PointLight[] = [];
+  private swipes: { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; life: number; base: number }[] = [];
+  private swipeGeo: THREE.RingGeometry | null = null;
 
   /* fx pools */
   private pCount = 600;
@@ -863,83 +863,10 @@ export class FoundryGame {
 
   private buildEnemy(kind: EnemyKind, x: number, z: number): Enemy {
     const def = ENEMY_DEFS[kind];
-    const g = new THREE.Group();
+    const rig = buildRaiderRig(kind);
+    const g = rig.group;
     const scaleHp = 1 + (this.wave - 1) * 0.16;
     const scaleSp = 1 + Math.min(this.wave, 14) * 0.022;
-
-    const skinTones: Record<EnemyKind, string> = { scrapper: "#8a5a3c", runner: "#b8a488", brute: "#6e6259" };
-    const clothTones: Record<EnemyKind, string> = { scrapper: "#6e3320", runner: "#3e4a35", brute: "#41464d" };
-    const eyeTones: Record<EnemyKind, string> = { scrapper: "#ffb42e", runner: "#7dff5e", brute: "#ff2e1f" };
-
-    const cloth = new THREE.MeshLambertMaterial({ color: clothTones[kind], flatShading: true });
-    const skin = new THREE.MeshLambertMaterial({ color: skinTones[kind], flatShading: true });
-    const dark = new THREE.MeshLambertMaterial({ color: "#26201a", flatShading: true });
-    const eyeMat = new THREE.MeshBasicMaterial({ color: eyeTones[kind] });
-
-    const legMat = kind === "brute" ? dark : cloth;
-    const legL = new THREE.Group();
-    const legR = new THREE.Group();
-    for (const [leg, side] of [[legL, -1], [legR, 1]] as [THREE.Group, number][]) {
-      const thigh = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.5, 0.2), legMat);
-      thigh.position.y = -0.25;
-      leg.add(thigh);
-      const boot = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.14, 0.3), dark);
-      boot.position.set(0, -0.55, 0.05);
-      leg.add(boot);
-      leg.position.set(0.13 * side, 0.62, 0);
-      g.add(leg);
-    }
-
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.62, 0.3), cloth);
-    torso.position.y = 1.0;
-    g.add(torso);
-    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.34, 0.08), kind === "brute" ? new THREE.MeshLambertMaterial({ color: "#5a6068", flatShading: true }) : dark);
-    plate.position.set(0, 1.06, 0.17);
-    g.add(plate);
-
-    const armL = new THREE.Group();
-    const armR = new THREE.Group();
-    for (const [arm, side] of [[armL, -1], [armR, 1]] as [THREE.Group, number][]) {
-      const upper = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.52, 0.16), side < 0 ? cloth : skin);
-      upper.position.y = -0.24;
-      arm.add(upper);
-      arm.position.set(0.36 * side, 1.28, 0);
-      g.add(arm);
-    }
-    /* weapon in right hand */
-    if (kind === "brute") {
-      const hammer = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.7, 0.12), dark);
-      hammer.position.set(0, -0.65, 0.1);
-      armR.add(hammer);
-      const head = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.2, 0.2), new THREE.MeshLambertMaterial({ color: "#6a7078", flatShading: true }));
-      head.position.set(0, -0.95, 0.1);
-      armR.add(head);
-    } else {
-      const pipe = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.66, 0.06), new THREE.MeshLambertMaterial({ color: "#7a7f86", flatShading: true }));
-      pipe.position.set(0, -0.62, 0.12);
-      pipe.rotation.x = 0.4;
-      armR.add(pipe);
-    }
-
-    const headG = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3), skin);
-    headG.position.y = 1.52;
-    g.add(headG);
-    if (kind === "scrapper") {
-      const mohawk = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.16, 0.26), new THREE.MeshLambertMaterial({ color: "#c43a22", flatShading: true }));
-      mohawk.position.y = 1.72;
-      g.add(mohawk);
-    }
-    if (kind === "brute") {
-      const helm = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.16, 0.36), new THREE.MeshLambertMaterial({ color: "#5a6068", flatShading: true }));
-      helm.position.y = 1.66;
-      g.add(helm);
-    }
-    const eyeL = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, 0.03), eyeMat);
-    eyeL.position.set(-0.08, 1.55, 0.16);
-    g.add(eyeL);
-    const eyeR = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.05, 0.03), eyeMat);
-    eyeR.position.set(0.08, 1.55, 0.16);
-    g.add(eyeR);
 
     const s = def.scale;
     g.scale.setScalar(s);
@@ -947,8 +874,7 @@ export class FoundryGame {
 
     const hitData = { kind: "enemy" as const, enemy: null as unknown as Enemy };
     const enemy: Enemy = {
-      group: g, legL, legR, armL, armR,
-      torsoMat: cloth, eyeMat,
+      group: g, rig,
       kind,
       hp: def.hp * scaleHp,
       maxHp: def.hp * scaleHp,
@@ -1145,7 +1071,7 @@ export class FoundryGame {
         if (data) {
           if (data.kind === "enemy") {
             anyHit = true;
-            const head = hits[0].point.y - data.enemy.group.position.y > 1.32 * ENEMY_DEFS[data.enemy.kind as EnemyKind].scale;
+            const head = hits[0].point.y - data.enemy.group.position.y > 1.42 * ENEMY_DEFS[data.enemy.kind as EnemyKind].scale;
             const knock = this.weaponIdx === 1 ? 6.5 : 1.4;
             this.damageEnemy(data.enemy, w.dmg * (head ? 2 : 1), hits[0].point, head, knock, dir.x, dir.z, w.tag);
           } else if (data.kind === "barrel") {
@@ -1535,6 +1461,7 @@ export class FoundryGame {
     });
 
     this.updateFx(dt);
+    this.updateSwipes(dt);
 
     /* ---------- camera ---------- */
     this.trauma = Math.max(0, this.trauma - dt * 2.1);
@@ -1571,17 +1498,19 @@ export class FoundryGame {
 
   private updateEnemy(e: Enemy, dt: number, t: number) {
     e.flash = Math.max(0, e.flash - dt * 6);
-    e.torsoMat.emissive.setRGB(e.flash * 0.9, e.flash * 0.12, e.flash * 0.05);
+    for (const m of e.rig.flashMats) m.emissive.setRGB(e.flash * 0.85, e.flash * 0.1, e.flash * 0.04);
+    e.rig.eyeMat.color.copy(e.rig.eyeBase).lerp(FLASH_WHITE, e.flash * 0.8);
     e.attackCd -= dt;
 
     if (e.state === "dead") {
       e.stateT += dt;
-      const fall = Math.min(1, e.stateT * 3.2);
-      e.group.rotation.x = (-Math.PI / 2) * fall;
+      const fall = Math.min(1, e.stateT * 2.6);
+      e.group.rotation.x = (-Math.PI / 2) * fall * fall;
       if (e.stateT > 2.6) {
         e.sinkT += dt;
         e.group.position.y -= dt * 0.8;
       }
+      this.animRaider(e, dt, t);
       return;
     }
 
@@ -1593,6 +1522,7 @@ export class FoundryGame {
         e.group.position.y = 0;
         e.state = "chase";
       }
+      this.animRaider(e, dt, t);
       return;
     }
 
@@ -1646,42 +1576,84 @@ export class FoundryGame {
       }
     } else if (e.state === "windup") {
       e.stateT += dt;
-      const windupTime = e.kind === "brute" ? 0.62 : 0.42;
-      const k = Math.min(1, e.stateT / windupTime);
-      e.armR.rotation.x = -2.4 * k + Math.sin(t * 42) * 0.05 * k;
-      e.armL.rotation.x = 0.5 * k;
-      if (e.stateT >= windupTime) {
+      if (e.stateT >= WINDUP_TIME[e.kind]) {
         e.state = "strike";
         e.stateT = 0;
         sfx.swing();
+        this.spawnSwipe(e.group.position, Math.atan2(dx, dz), ENEMY_DEFS[e.kind].scale);
       }
     } else if (e.state === "strike") {
       e.stateT += dt;
-      const k = Math.min(1, e.stateT / 0.16);
-      e.armR.rotation.x = -2.4 + 3.1 * k;
       if (e.stateT >= 0.09 && e.stateT - dt < 0.09) {
         /* impact frame */
-        const dx2 = this.pos.x - e.group.position.x;
-        const dz2 = this.pos.z - e.group.position.z;
-        const d2 = Math.hypot(dx2, dz2);
-        if (d2 < e.range * 1.25) this.damagePlayer(e.dmg, e.group.position);
+        if (dist < e.range * 1.25) this.damagePlayer(e.dmg, e.group.position);
       }
       if (e.stateT >= 0.4) {
-        e.armR.rotation.x = 0;
-        e.armL.rotation.x = 0;
         e.attackCd = e.kind === "brute" ? 1.5 : 0.95;
         e.state = "chase";
       }
     }
 
-    /* walk anim */
-    if (e.state === "chase") {
-      const sw = Math.sin(e.walkT) * 0.75;
-      e.legL.rotation.x = sw;
-      e.legR.rotation.x = -sw;
-      e.armL.rotation.x = -sw * 0.7;
-      if (e.armR.rotation.x > -0.1) e.armR.rotation.x = sw * 0.7;
-      e.group.position.y = Math.abs(Math.sin(e.walkT)) * 0.06;
+    this.animRaider(e, dt, t);
+  }
+
+  /* drive the skeletal rig from the enemy's current state */
+  private animRaider(e: Enemy, dt: number, t: number) {
+    const dx = this.pos.x - e.group.position.x;
+    const dz = this.pos.z - e.group.position.z;
+    const dist = Math.hypot(dx, dz) || 0.001;
+    let yl = Math.atan2(dx, dz) - e.group.rotation.y;
+    while (yl > Math.PI) yl -= Math.PI * 2;
+    while (yl < -Math.PI) yl += Math.PI * 2;
+    const headY = e.group.position.y + 1.6 * ENEMY_DEFS[e.kind].scale;
+    updateRaiderAnim(e.rig, e.kind, {
+      state: e.state,
+      stateT: e.stateT,
+      walkT: e.walkT,
+      t,
+      dt,
+      yawLocal: yl,
+      pitchToPlayer: Math.atan2(1.66 - headY, Math.max(1.2, dist)),
+      hitstun: Math.max(0, e.hitstun),
+    });
+  }
+
+  /* melee swipe arc — a fading additive slash in front of the attacker */
+  private spawnSwipe(pos: THREE.Vector3, yaw: number, scale: number) {
+    if (!this.swipeGeo) this.swipeGeo = new THREE.RingGeometry(0.55, 1.05, 14, 1, -1.0, 2.0);
+    let s = this.swipes.find((x) => x.life <= 0);
+    if (!s) {
+      if (this.swipes.length >= 16) return;
+      const mat = new THREE.MeshBasicMaterial({
+        color: "#ffb066",
+        transparent: true,
+        opacity: 0,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(this.swipeGeo, mat);
+      this.scene.add(mesh);
+      s = { mesh, mat, life: 0, base: 1 };
+      this.swipes.push(s);
+    }
+    s.life = 0.13;
+    s.base = scale;
+    s.mesh.visible = true;
+    s.mesh.position.set(pos.x + Math.sin(yaw) * 0.55 * scale, pos.y + 1.12 * scale, pos.z + Math.cos(yaw) * 0.55 * scale);
+    s.mesh.rotation.set(-0.35, yaw, Math.random() * 6.28);
+    s.mesh.scale.setScalar(0.6 * scale);
+  }
+
+  private updateSwipes(dt: number) {
+    for (const s of this.swipes) {
+      if (s.life <= 0) continue;
+      s.life -= dt;
+      const k = 1 - Math.max(0, s.life) / 0.13;
+      s.mat.opacity = (1 - k) * 0.85;
+      s.mesh.scale.setScalar((0.6 + 0.75 * k) * s.base);
+      s.mesh.rotation.z += dt * 16;
+      if (s.life <= 0) s.mesh.visible = false;
     }
   }
 
