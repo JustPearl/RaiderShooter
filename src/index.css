@@ -213,6 +213,25 @@ canvas.game-canvas {
   transform: skewX(-8deg);
 }
 
+@keyframes cardSlam {
+  0% { transform: translateY(46px) skewX(-4deg) scale(0.92); opacity: 0; }
+  55% { transform: translateY(-6px) skewX(-4deg) scale(1.02); opacity: 1; }
+  100% { transform: translateY(0) skewX(-4deg) scale(1); opacity: 1; }
+}
+.draft-card {
+  cursor: crosshair;
+  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
+  animation: cardSlam 0.42s cubic-bezier(0.2, 0.9, 0.25, 1.2) backwards;
+  transition: transform 0.13s ease, box-shadow 0.13s ease, border-color 0.13s ease, background 0.13s ease;
+}
+.draft-card:hover {
+  transform: translateY(-7px) skewX(-4deg) scale(1.025);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.75), 0 0 26px rgba(255, 107, 26, 0.22), inset 0 0 40px rgba(255, 107, 26, 0.06);
+}
+.draft-card:active {
+  transform: translateY(-2px) skewX(-4deg) scale(0.99);
+}
+
 button.menu-btn {
   cursor: crosshair;
   transition: transform 0.08s ease, background 0.12s ease, color 0.12s ease;

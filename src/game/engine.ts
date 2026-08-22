@@ -14,7 +14,19 @@ import {
 
 /* ============================== Types ============================== */
 
-export type GamePhase = "attract" | "playing" | "paused" | "dead";
+export type GamePhase = "attract" | "playing" | "paused" | "dead" | "draft";
+
+export type Rarity = "common" | "rare" | "epic";
+
+export interface SkillCard {
+  id: string;
+  name: string;
+  desc: string;
+  tag: "SYSTEMS" | "ABILITY";
+  rarity: Rarity;
+  level: number; /* times already installed */
+  maxLevel: number;
+}
 
 export interface HudData {
   hp: number;
@@ -42,7 +54,8 @@ export type GameEvent =
   | { type: "wave"; wave: number; count: number }
   | { type: "cleared"; wave: number; bonus: number }
   | { type: "kill"; text: string }
-  | { type: "pickup"; text: string };
+  | { type: "pickup"; text: string }
+  | { type: "draft"; cards: SkillCard[] };
 
 export interface FinalStats {
   wave: number;
@@ -139,6 +152,33 @@ const WEAPONS: WeaponDef[] = [
   { name: "M870 BREAKER", tag: "BREAKER", dmg: 15, pellets: 8, spread: 0.055, kick: 0.06, cooldown: 0.82, magSize: 6, reloadTime: 0.5, auto: false, fovPunch: 5 },
 ];
 
+/* ============================== Skill pool ============================== */
+
+interface SkillDef {
+  id: string;
+  name: string;
+  desc: string;
+  tag: "SYSTEMS" | "ABILITY";
+  rarity: Rarity;
+  maxLevel: number;
+  weight: number;
+}
+
+const SKILLS: SkillDef[] = [
+  { id: "dmg", name: "HEAVY ROUNDS", desc: "+25% weapon damage. The foundry casts them hot.", tag: "SYSTEMS", rarity: "common", maxLevel: 4, weight: 5 },
+  { id: "rate", name: "TRIGGER WORK", desc: "+20% fire rate. Filed sear, polished spring.", tag: "SYSTEMS", rarity: "common", maxLevel: 4, weight: 5 },
+  { id: "hp", name: "WELDED PLATE", desc: "+25 max integrity, patched up immediately.", tag: "SYSTEMS", rarity: "common", maxLevel: 4, weight: 5 },
+  { id: "spd", name: "SERVO LEGS", desc: "+12% movement speed. Salvaged loader hydraulics.", tag: "SYSTEMS", rarity: "common", maxLevel: 3, weight: 5 },
+  { id: "rel", name: "FAST HANDS", desc: "30% faster reloads and +2 pistol rounds per mag.", tag: "SYSTEMS", rarity: "common", maxLevel: 3, weight: 5 },
+  { id: "crit", name: "DEADEYE OPTIC", desc: "+15% chance to crit for triple damage.", tag: "ABILITY", rarity: "rare", maxLevel: 3, weight: 3 },
+  { id: "vamp", name: "SCRAP HEART", desc: "Every kill welds +6 integrity back on.", tag: "ABILITY", rarity: "rare", maxLevel: 3, weight: 3 },
+  { id: "tank", name: "BOILER SUIT", desc: "25% less damage taken. Stacks multiply.", tag: "ABILITY", rarity: "rare", maxLevel: 2, weight: 3 },
+  { id: "magnet", name: "SALVAGE RIG", desc: "2.2x pickup radius, +50% supply drops.", tag: "ABILITY", rarity: "rare", maxLevel: 2, weight: 3 },
+  { id: "pellets", name: "FLECHETTE LOAD", desc: "+3 shotgun pellets per shell. Wider erasure.", tag: "ABILITY", rarity: "epic", maxLevel: 2, weight: 1.6 },
+  { id: "ninth", name: "NINTH LIFE", desc: "Survive a lethal hit at 35 integrity — once per wave.", tag: "ABILITY", rarity: "epic", maxLevel: 2, weight: 1.6 },
+  { id: "berserk", name: "REDLINE VALVE", desc: "Below 40% integrity: +30% damage, +15% speed.", tag: "ABILITY", rarity: "epic", maxLevel: 2, weight: 1.6 },
+];
+
 const ENEMY_DEFS: Record<EnemyKind, { hp: number; speed: number; dmg: number; range: number; score: number; scale: number }> = {
   scrapper: { hp: 60, speed: 3.5, dmg: 8, range: 1.75, score: 100, scale: 1 },
   runner: { hp: 34, speed: 5.7, dmg: 6, range: 1.55, score: 150, scale: 0.88 },
@@ -168,7 +208,26 @@ export class FoundryGame {
   private pitch = 0;
   private grounded = true;
   private hp = 100;
+  private maxHp = 100;
   private regenT = 0;
+
+  /* installed modifications */
+  private dmgMul = 1;
+  private fireMul = 1;
+  private speedMul = 1;
+  private reloadMul = 1;
+  private critChance = 0;
+  private lifesteal = 0;
+  private dmgResist = 0;
+  private pickupRadiusMul = 1;
+  private dropMul = 1;
+  private extraPellets = 0;
+  private secondWind = false;
+  private secondWindHp = 35;
+  private secondWindUsed = false;
+  private berserk = false;
+  private berserkBonus = 0;
+  private skillLevels: Record<string, number> = {};
   private bobT = 0;
   private bobY = 0;
   private recoilPitch = 0;
@@ -329,6 +388,8 @@ export class FoundryGame {
   private onMouseDown = (e: MouseEvent) => {
     if (e.button === 0) this.firing = true;
     if (e.button === 2) this.aiming = true;
+    /* safety: a click while un-locked re-engages the pointer lock */
+    if (this.phase === "playing" && document.pointerLockElement !== this.canvas) this.lockPointer();
   };
   private onMouseUp = (e: MouseEvent) => {
     if (e.button === 0) this.firing = false;
@@ -407,6 +468,25 @@ export class FoundryGame {
 
   private resetRun() {
     this.hp = 100;
+    this.maxHp = 100;
+    /* strip all installed modifications */
+    this.dmgMul = 1;
+    this.fireMul = 1;
+    this.speedMul = 1;
+    this.reloadMul = 1;
+    this.critChance = 0;
+    this.lifesteal = 0;
+    this.dmgResist = 0;
+    this.pickupRadiusMul = 1;
+    this.dropMul = 1;
+    this.extraPellets = 0;
+    this.secondWind = false;
+    this.secondWindHp = 35;
+    this.secondWindUsed = false;
+    this.berserk = false;
+    this.berserkBonus = 0;
+    this.skillLevels = {};
+    WEAPONS[0].magSize = 12;
     this.pos.set(0, 0, 8);
     this.vel.set(0, 0, 0);
     this.yaw = Math.PI;
@@ -1110,10 +1190,13 @@ export class FoundryGame {
     this.tmpV.copy(e.group.position).add(this.tmpV2.set(0, 1, 0));
     this.spawnParticles(this.tmpV, 16, ["#c42418", "#8a160c"], 5.5, 0.7, 9);
 
-    /* drops */
+    /* lifesteal welds integrity back on */
+    if (this.lifesteal > 0) this.hp = Math.min(this.maxHp, this.hp + this.lifesteal);
+
+    /* drops — boosted by the salvage rig */
     const r = Math.random();
-    if (r < 0.09 && this.hp < 90) this.dropPickup(e.group.position, "health");
-    else if (r < 0.17) this.dropPickup(e.group.position, "ammo");
+    if (r < 0.09 * this.dropMul && this.hp < this.maxHp * 0.92) this.dropPickup(e.group.position, "health");
+    else if (r < 0.17 * this.dropMul) this.dropPickup(e.group.position, "ammo");
   }
 
   private dropPickup(at: THREE.Vector3, kind: "health" | "ammo") {
@@ -1155,9 +1238,13 @@ export class FoundryGame {
     if (this.mags[this.weaponIdx] >= w.magSize) return;
     if (this.reserves[this.weaponIdx] <= 0) return;
     this.wState = "reloading";
-    this.wT = w.reloadTime;
+    this.wT = this.effReload(w);
     this.shellT = 0;
     sfx.reload(0);
+  }
+
+  private effReload(w: WeaponDef): number {
+    return w.reloadTime / this.reloadMul;
   }
 
   private currentSpread(): number {
@@ -1189,7 +1276,7 @@ export class FoundryGame {
     }
 
     this.mags[this.weaponIdx]--;
-    this.fireCd = w.cooldown;
+    this.fireCd = w.cooldown / this.fireMul;
     this.shotsFired++;
     this.heat = Math.min(1, this.heat + (this.weaponIdx === 0 ? 0.16 : 0.4));
     this.recoilPitch += w.kick * (0.8 + Math.random() * 0.4);
@@ -1216,8 +1303,13 @@ export class FoundryGame {
     muzzle.getWorldPosition(this.tmpV);
     const origin = this.tmpV.clone();
 
+    const berserkOn = this.berserk && this.hp < this.maxHp * 0.4;
+    const crit = Math.random() < this.critChance;
+    const dmg = w.dmg * this.dmgMul * (berserkOn ? 1 + 0.3 * this.berserkBonus : 1) * (crit ? 3 : 1);
+    const pellets = w.pellets + (this.weaponIdx === 1 ? this.extraPellets : 0);
+
     let anyHit = false;
-    for (let p = 0; p < w.pellets; p++) {
+    for (let p = 0; p < pellets; p++) {
       const dir = camDir.clone();
       dir.x += (Math.random() - 0.5) * 2 * spread;
       dir.y += (Math.random() - 0.5) * 2 * spread;
@@ -1235,7 +1327,7 @@ export class FoundryGame {
             anyHit = true;
             const head = hits[0].point.y - data.enemy.group.position.y > 1.42 * ENEMY_DEFS[data.enemy.kind as EnemyKind].scale;
             const knock = this.weaponIdx === 1 ? 6.5 : 1.4;
-            this.damageEnemy(data.enemy, w.dmg * (head ? 2 : 1), hits[0].point, head, knock, dir, w.tag, this.weaponIdx === 1 ? 11 : 5.5);
+            this.damageEnemy(data.enemy, dmg * (head ? 2 : 1), hits[0].point, head || crit, knock, dir, w.tag, this.weaponIdx === 1 ? 11 : 5.5);
           } else if (data.kind === "barrel") {
             anyHit = true;
             this.hitBarrel(data.barrel, w.tag);
@@ -1302,8 +1394,19 @@ export class FoundryGame {
 
   private damagePlayer(dmg: number, from?: THREE.Vector3) {
     if (this.phase !== "playing") return;
-    this.hp = Math.max(0, this.hp - dmg);
+    this.hp = Math.max(0, this.hp - dmg * (1 - this.dmgResist));
     this.regenT = 0;
+    if (this.hp <= 0 && this.secondWind && !this.secondWindUsed) {
+      /* the ninth life — systems reboot at the last moment */
+      this.secondWindUsed = true;
+      this.hp = this.secondWindHp;
+      this.trauma = 1.2;
+      this.regenT = 1.5;
+      this.onEvent({ type: "pickup", text: "NINTH LIFE SPENT" });
+      this.spawnParticles(this.pos.clone().add(this.tmpV3.set(0, 1, 0)), 20, ["#7dff5e", "#ffb42e"], 5, 0.7, 3);
+      sfx.waveClear();
+      return;
+    }
     this.trauma = Math.min(1.5, this.trauma + 0.55);
     this.onEvent({ type: "damage" });
     sfx.hurt();
@@ -1336,6 +1439,7 @@ export class FoundryGame {
 
   private beginWave() {
     this.wave++;
+    this.secondWindUsed = false;
     const count = Math.min(6 + this.wave * 2 + Math.floor(this.wave * this.wave * 0.18), 26);
     const brutes = this.wave >= 3 ? Math.min(1 + Math.floor((this.wave - 3) / 2), 5) : 0;
     const runners = this.wave >= 2 ? Math.floor(count * 0.3) : 0;
@@ -1358,11 +1462,117 @@ export class FoundryGame {
   private clearWave() {
     const bonus = 250 * this.wave;
     this.score += bonus;
-    this.hp = Math.min(100, this.hp + 12);
+    this.hp = Math.min(this.maxHp, this.hp + 12);
     this.reserves[1] = Math.min(48, this.reserves[1] + 10);
     this.onEvent({ type: "cleared", wave: this.wave, bonus });
     sfx.waveClear();
+    if (this.wave % 3 === 0) this.offerDraft();
+    else this.startIntermission();
+  }
+
+  /* ============================== Skill draft ============================== */
+
+  private rollCards(n: number): SkillCard[] {
+    const eligible = SKILLS.filter((s) => (this.skillLevels[s.id] ?? 0) < s.maxLevel);
+    const cards: SkillCard[] = [];
+    const pool = [...eligible];
+    while (cards.length < n && pool.length > 0) {
+      let total = 0;
+      for (const s of pool) total += s.weight;
+      let roll = Math.random() * total;
+      let pick = pool[0];
+      for (const s of pool) {
+        roll -= s.weight;
+        if (roll <= 0) {
+          pick = s;
+          break;
+        }
+      }
+      pool.splice(pool.indexOf(pick), 1);
+      cards.push({
+        id: pick.id,
+        name: pick.name,
+        desc: pick.desc,
+        tag: pick.tag,
+        rarity: pick.rarity,
+        level: this.skillLevels[pick.id] ?? 0,
+        maxLevel: pick.maxLevel,
+      });
+    }
+    return cards;
+  }
+
+  private offerDraft() {
+    const cards = this.rollCards(3);
+    if (cards.length === 0) {
+      this.startIntermission();
+      return;
+    }
+    this.phase = "draft";
+    this.firing = false;
+    this.onEvent({ type: "draft", cards });
+    if (document.pointerLockElement === this.canvas) document.exitPointerLock();
+  }
+
+  chooseCard(id: string) {
+    if (this.phase !== "draft") return;
+    this.applyCard(id);
+    this.skillLevels[id] = (this.skillLevels[id] ?? 0) + 1;
+    sfx.pickup("ammo");
     this.startIntermission();
+    this.phase = "playing";
+    this.onEvent({ type: "playing" });
+    this.lockPointer();
+  }
+
+  private applyCard(id: string) {
+    const lv = this.skillLevels[id] ?? 0;
+    switch (id) {
+      case "dmg":
+        this.dmgMul *= 1.25;
+        break;
+      case "rate":
+        this.fireMul *= 1.2;
+        break;
+      case "hp":
+        this.maxHp += 25;
+        this.hp = Math.min(this.maxHp, this.hp + 25);
+        break;
+      case "spd":
+        this.speedMul *= 1.12;
+        break;
+      case "rel":
+        this.reloadMul *= 1.3;
+        WEAPONS[0].magSize += 2;
+        this.mags[0] += 2;
+        break;
+      case "crit":
+        this.critChance = Math.min(0.6, this.critChance + 0.15);
+        break;
+      case "vamp":
+        this.lifesteal += 6;
+        break;
+      case "tank":
+        this.dmgResist = 1 - (1 - this.dmgResist) * 0.75;
+        break;
+      case "magnet":
+        this.pickupRadiusMul *= 2.2;
+        this.dropMul *= 1.5;
+        break;
+      case "pellets":
+        this.extraPellets += 3;
+        break;
+      case "ninth":
+        this.secondWind = true;
+        this.secondWindHp = lv >= 1 ? 60 : 35;
+        this.secondWindUsed = false;
+        break;
+      case "berserk":
+        this.berserk = true;
+        this.berserkBonus = lv >= 1 ? 2 : 1;
+        break;
+    }
+    this.onEvent({ type: "pickup", text: `${SKILLS.find((s) => s.id === id)?.name ?? id} INSTALLED` });
   }
 
   /* ============================== Collision ============================== */
@@ -1415,13 +1625,20 @@ export class FoundryGame {
       return;
     }
 
+    if (this.phase === "draft") {
+      /* arena holds its breath behind the draft board */
+      this.updateFx(dt);
+      return;
+    }
+
     if (this.phase === "paused") return;
 
     this.playT += dt;
 
     /* ---------- player movement ---------- */
     const sprint = this.keys.has("ShiftLeft") || this.keys.has("ShiftRight");
-    const speed = (sprint ? 8.4 : 5.8) * (1 - 0.45 * this.aimAmt);
+    const berserkSpd = this.berserk && this.hp < this.maxHp * 0.4 ? 1 + 0.15 * this.berserkBonus : 1;
+    const speed = (sprint ? 8.4 : 5.8) * (1 - 0.45 * this.aimAmt) * this.speedMul * berserkSpd;
     let ix = 0;
     let iz = 0;
     if (this.keys.has("KeyW") || this.keys.has("ArrowUp")) iz -= 1;
@@ -1524,7 +1741,7 @@ export class FoundryGame {
       if (this.weaponIdx === 1) {
         /* shell-by-shell */
         this.shellT += dt;
-        if (this.shellT >= w.reloadTime) {
+        if (this.shellT >= this.effReload(w)) {
           this.shellT = 0;
           this.mags[1]++;
           this.reserves[1]--;
@@ -1601,7 +1818,7 @@ export class FoundryGame {
     if (this.wState === "reloading") {
       if (this.weaponIdx === 0) {
         /* pistol: tilt out, mag drop, slap home */
-        const prog = 1 - this.wT / w.reloadTime;
+        const prog = 1 - this.wT / this.effReload(w);
         const dip = Math.sin(prog * Math.PI);
         vy -= 0.2 * dip;
         vrx = -0.85 * dip;
@@ -1611,7 +1828,7 @@ export class FoundryGame {
         /* shotgun: nose up, each shell shoved in with a wrist twist */
         vy -= 0.14;
         vrx = -0.5;
-        const shellPh = Math.sin((this.shellT / w.reloadTime) * Math.PI);
+        const shellPh = Math.sin((this.shellT / this.effReload(w)) * Math.PI);
         vy -= 0.05 * shellPh;
         vrz += 0.3 * shellPh;
         vx -= 0.03 * shellPh;
@@ -1644,7 +1861,7 @@ export class FoundryGame {
       } else if (this.rackT >= 0) {
         pz = Math.sin(Math.min(1, this.rackT / 0.36) * Math.PI) * 0.06;
       } else if (this.wState === "reloading" && this.weaponIdx === 1) {
-        pz = Math.sin((this.shellT / w.reloadTime) * Math.PI) * 0.02;
+        pz = Math.sin((this.shellT / this.effReload(w)) * Math.PI) * 0.02;
       }
       this.vmPump.position.z = -0.3 + pz;
     }
@@ -1691,9 +1908,9 @@ export class FoundryGame {
       p.group.position.y = 0.3 + Math.sin(t * 3 + p.group.position.x) * 0.08;
       if (p.life < 3) p.group.visible = Math.floor(t * 6) % 2 === 0;
       const d = Math.hypot(p.group.position.x - this.pos.x, p.group.position.z - this.pos.z);
-      if (d < 1.1) {
+      if (d < 1.1 * this.pickupRadiusMul) {
         if (p.kind === "health") {
-          this.hp = Math.min(100, this.hp + 25);
+          this.hp = Math.min(this.maxHp, this.hp + 25);
           this.onEvent({ type: "pickup", text: "+25 HP" });
         } else {
           this.reserves[1] = Math.min(48, this.reserves[1] + 6);
@@ -1731,7 +1948,7 @@ export class FoundryGame {
     const alive = this.enemies.filter((e) => e.state !== "dead").length + this.spawnQueue.length;
     this.onHud({
       hp: Math.ceil(this.hp),
-      maxHp: 100,
+      maxHp: this.maxHp,
       ammo: this.mags[this.weaponIdx],
       reserve: this.weaponIdx === 0 ? -1 : this.reserves[1],
       weapon: this.weaponIdx,
@@ -1745,8 +1962,8 @@ export class FoundryGame {
         this.wState !== "reloading"
           ? 0
           : this.weaponIdx === 1
-            ? Math.min(1, this.shellT / w.reloadTime)
-            : Math.min(1, 1 - this.wT / w.reloadTime),
+            ? Math.min(1, this.shellT / this.effReload(w))
+            : Math.min(1, 1 - this.wT / this.effReload(w)),
       combo: this.combo > 1 ? this.combo : 0,
       enemiesLeft: this.waveMode === "active" ? alive : 0,
     });

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { FoundryGame, type GameEvent, type HudData, type FinalStats, type GamePhase } from "./game/engine";
+import { FoundryGame, type GameEvent, type HudData, type FinalStats, type GamePhase, type SkillCard } from "./game/engine";
+import { sfx } from "./game/audio";
 
 interface KillEntry {
   id: number;
@@ -25,6 +26,8 @@ export default function App() {
   const [hitmark, setHitmark] = useState<{ key: number; head: boolean; kill: boolean } | null>(null);
   const hitTimer = useRef(0);
   const [toast, setToast] = useState<{ key: number; text: string } | null>(null);
+  const [draftCards, setDraftCards] = useState<SkillCard[] | null>(null);
+  const [curWave, setCurWave] = useState(0);
   const [weapon, setWeapon] = useState(0);
 
   /* fast-path refs (updated every frame without re-render) */
@@ -55,9 +58,14 @@ export default function App() {
         case "playing":
           setPhase("playing");
           setKillFeed([]);
+          setDraftCards(null);
           break;
         case "paused":
           setPhase("paused");
+          break;
+        case "draft":
+          setDraftCards(e.cards);
+          setPhase("draft");
           break;
         case "dead":
           setStats(e.stats);
@@ -84,6 +92,7 @@ export default function App() {
           setBanner({ key: uid++, title: `WAVE ${String(e.wave).padStart(2, "0")}`, sub: `${e.count} RAIDERS BREACHING THE FLOOR`, tone: "orange" });
           break;
         case "cleared":
+          setCurWave(e.wave);
           setBanner({ key: uid++, title: `WAVE ${String(e.wave).padStart(2, "0")} CLEARED`, sub: `+${e.bonus} SALVAGE // +10 SHELLS // +12 HP`, tone: "green" });
           break;
         case "kill": {
@@ -170,6 +179,25 @@ export default function App() {
     const t = setTimeout(() => setToast(null), 1400);
     return () => clearTimeout(t);
   }, [toast]);
+
+  const pickCard = (i: number) => {
+    const c = draftCards?.[i];
+    if (!c || phase !== "draft") return;
+    sfx.pickup("ammo");
+    gameRef.current?.chooseCard(c.id);
+  };
+
+  useEffect(() => {
+    if (phase !== "draft") return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.code === "Digit1") pickCard(0);
+      if (ev.code === "Digit2") pickCard(1);
+      if (ev.code === "Digit3") pickCard(2);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, draftCards]);
 
   const inGame = phase === "playing";
 
@@ -522,6 +550,74 @@ export default function App() {
                 ABANDON POST
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======= SKILL DRAFT ======= */}
+      {phase === "draft" && draftCards && (
+        <div className="fixed inset-0 z-[55] flex flex-col items-center justify-center bg-[rgba(8,6,3,0.82)]" style={{ cursor: "crosshair" }}>
+          <div className="pointer-events-none absolute inset-0 menu-grid opacity-60" />
+          <div className="relative flex flex-col items-center">
+            <div className="hazard-tape mb-4 h-[6px] w-56 opacity-90" />
+            <div className="font-display title-slant text-4xl text-[#ffb42e] hud-shadow md:text-5xl">SALVAGE REQUISITION</div>
+            <p className="mt-2 text-[11px] font-semibold tracking-[0.35em] text-[#8a7f6c]">
+              WAVE {String(curWave).padStart(2, "0")} SCRAPPED — INSTALL ONE MODIFICATION
+            </p>
+
+            <div className="mt-9 flex flex-col gap-5 md:flex-row md:gap-6">
+              {draftCards.map((c, i) => {
+                const rc = c.rarity === "epic" ? "#ff2e1f" : c.rarity === "rare" ? "#ff6b1a" : "#b8a88f";
+                return (
+                  <button
+                    key={c.id}
+                    onClick={() => pickCard(i)}
+                    onMouseEnter={() => sfx.uiMove()}
+                    className="draft-card group relative w-[300px] border bg-[rgba(18,13,8,0.94)] px-6 pb-6 pt-0 text-left"
+                    style={{ borderColor: `${rc}66`, animationDelay: `${i * 0.09}s` }}
+                  >
+                    {/* rarity header tape */}
+                    <div className="absolute inset-x-0 top-0 flex h-[26px] items-center justify-between px-4" style={{ background: rc }}>
+                      <span className="font-display text-[11px] tracking-[0.22em] text-[#14100c]">{c.tag}</span>
+                      <span className="font-display text-[10px] tracking-[0.2em] text-[#14100c]">{c.rarity.toUpperCase()}</span>
+                    </div>
+                    <div className="pt-9">
+                      <div className="font-display text-[22px] leading-tight text-[#ffe8c8] group-hover:text-white" style={{ textShadow: `0 0 18px ${rc}55` }}>
+                        {c.name}
+                      </div>
+                      <p className="mt-2.5 min-h-[54px] text-[12.5px] leading-snug text-[#cdbfa8]">{c.desc}</p>
+                      <div className="mt-4 flex items-center justify-between border-t border-[rgba(184,168,143,0.18)] pt-3.5">
+                        <div className="flex gap-1.5">
+                          {Array.from({ length: c.maxLevel }).map((_, p) => (
+                            <span
+                              key={p}
+                              className="inline-block h-[7px] w-[16px] skew-x-[-14deg]"
+                              style={{ background: p < c.level + 1 ? rc : "rgba(184,168,143,0.16)" }}
+                            />
+                          ))}
+                        </div>
+                        <span className="text-[10px] font-bold tracking-[0.18em] text-[#8a7f6c]">
+                          {c.level > 0 ? `LV ${c.level} → ${c.level + 1}` : "NEW INSTALL"}
+                        </span>
+                      </div>
+                      <div className="mt-4 flex items-center gap-2">
+                        <span className="keycap">{i + 1}</span>
+                        <span className="text-[10px] font-semibold tracking-[0.25em] text-[#6e6353] transition-colors group-hover:text-[#ffb42e]">
+                          INSTALL MOD
+                        </span>
+                      </div>
+                    </div>
+                    {/* corner brackets */}
+                    <span className="pointer-events-none absolute left-1 top-[30px] h-3 w-3 border-l-2 border-t-2" style={{ borderColor: rc }} />
+                    <span className="pointer-events-none absolute bottom-1 right-1 h-3 w-3 border-b-2 border-r-2" style={{ borderColor: rc }} />
+                  </button>
+                );
+              })}
+            </div>
+
+            <p className="mt-8 text-[10px] font-semibold tracking-[0.3em] text-[#6e6353]">
+              REQUISITION OFFERED EVERY 3 WAVES — THE LINE RESUMES ON INSTALL
+            </p>
           </div>
         </div>
       )}
