@@ -42,7 +42,8 @@ export default function App() {
   const comboRef = useRef<HTMLDivElement>(null);
   const dmgRef = useRef<HTMLDivElement>(null);
   const lowHpRef = useRef<HTMLDivElement>(null);
-  const reloadRef = useRef<HTMLDivElement>(null);
+  const ringWrapRef = useRef<HTMLDivElement>(null);
+  const ringRef = useRef<SVGCircleElement>(null);
   const pipsRef = useRef<HTMLDivElement>(null);
   const slotRefs = [useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null)];
   const lastWeapon = useRef(-1);
@@ -125,7 +126,11 @@ export default function App() {
         comboRef.current.style.opacity = h.combo > 1 ? "1" : "0";
         comboRef.current.textContent = `×${h.combo}`;
       }
-      if (reloadRef.current) reloadRef.current.style.opacity = h.reloading ? "1" : "0";
+      if (ringRef.current && ringWrapRef.current) {
+        const C = 2 * Math.PI * 20;
+        ringRef.current.style.strokeDashoffset = String(C * (1 - h.reloadT));
+        ringWrapRef.current.style.opacity = h.reloading ? "1" : "0";
+      }
       if (pipsRef.current) {
         pipsRef.current.style.display = h.weapon === 1 ? "flex" : "none";
         for (let i = 0; i < 6; i++) {
@@ -227,8 +232,24 @@ export default function App() {
               </div>
             )}
             <div ref={comboRef} className="font-display absolute left-0 top-9 -translate-x-1/2 text-xl text-[#ff6b1a] hud-shadow" style={{ opacity: 0 }} />
-            <div ref={reloadRef} className="font-display absolute left-0 top-16 -translate-x-1/2 whitespace-nowrap text-[11px] tracking-[0.3em] text-[#ffb42e] pulse-glow" style={{ opacity: 0 }}>
-              RELOADING
+            {/* reload progress ring around the reticle */}
+            <div ref={ringWrapRef} className="absolute left-0 top-0" style={{ opacity: 0, transition: "opacity 0.12s ease" }}>
+              <svg width="52" height="52" viewBox="0 0 52 52" style={{ transform: "translate(-50%,-50%) rotate(-90deg)", display: "block", overflow: "visible" }}>
+                <circle cx="26" cy="26" r="20" fill="none" stroke="rgba(255,180,46,0.16)" strokeWidth="3" />
+                <circle
+                  ref={ringRef}
+                  cx="26"
+                  cy="26"
+                  r="20"
+                  fill="none"
+                  stroke="#ffb42e"
+                  strokeWidth="3"
+                  strokeLinecap="round"
+                  strokeDasharray={2 * Math.PI * 20}
+                  strokeDashoffset={2 * Math.PI * 20}
+                  style={{ filter: "drop-shadow(0 0 4px rgba(255,180,46,0.8))" }}
+                />
+              </svg>
             </div>
           </div>
 

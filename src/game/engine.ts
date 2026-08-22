@@ -28,6 +28,7 @@ export interface HudData {
   kills: number;
   spreadGap: number;
   reloading: boolean;
+  reloadT: number;
   combo: number;
   enemiesLeft: number;
 }
@@ -1549,6 +1550,12 @@ export class FoundryGame {
       kills: this.kills,
       spreadGap: 5 + this.currentSpread() * 620,
       reloading: this.wState === "reloading",
+      reloadT:
+        this.wState !== "reloading"
+          ? 0
+          : this.weaponIdx === 1
+            ? Math.min(1, this.shellT / w.reloadTime)
+            : Math.min(1, 1 - this.wT / w.reloadTime),
       combo: this.combo > 1 ? this.combo : 0,
       enemiesLeft: this.waveMode === "active" ? alive : 0,
     });
