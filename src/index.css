@@ -1,1 +1,224 @@
 @import "tailwindcss";
+
+:root {
+  --fo-orange: #ff6b1a;
+  --fo-amber: #ffb42e;
+  --fo-red: #ff2e1f;
+  --fo-green: #7dff5e;
+  --fo-steel: #b8a88f;
+  --fo-dark: #0d0a07;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--fo-dark);
+  overflow: hidden;
+  font-family: "Chakra Petch", monospace;
+  -webkit-font-smoothing: none;
+}
+
+.font-display {
+  font-family: "Black Ops One", "Chakra Petch", sans-serif;
+}
+
+canvas.game-canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  object-fit: cover;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  filter: contrast(1.07) saturate(1.1) brightness(1.02);
+}
+
+/* ---------- PS2 480i CRT stack ---------- */
+.crt-scanlines {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.28) 0px,
+    rgba(0, 0, 0, 0.28) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  animation: fieldShift 0.111s steps(2, jump-none) infinite;
+}
+@keyframes fieldShift {
+  from {
+    background-position-y: 0px;
+  }
+  to {
+    background-position-y: 2px;
+  }
+}
+
+.crt-grille {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 61;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.025) 0px,
+    rgba(255, 255, 255, 0.025) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  mix-blend-mode: screen;
+}
+
+.crt-flicker {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 62;
+  background: rgba(255, 244, 220, 0.028);
+  animation: crtFlicker 0.47s steps(7) infinite;
+}
+@keyframes crtFlicker {
+  0% { opacity: 0.55; }
+  20% { opacity: 0.9; }
+  35% { opacity: 0.4; }
+  55% { opacity: 1; }
+  70% { opacity: 0.6; }
+  100% { opacity: 0.85; }
+}
+
+.crt-vignette {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 63;
+  background:
+    radial-gradient(ellipse 120% 100% at 50% 50%, transparent 55%, rgba(0, 0, 0, 0.5) 100%),
+    linear-gradient(90deg, rgba(255, 40, 40, 0.05), transparent 8%, transparent 92%, rgba(40, 255, 120, 0.05));
+}
+
+.crt-dither {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 64;
+  opacity: 0.05;
+  background: conic-gradient(#fff 25%, transparent 0 50%, #fff 0 75%, transparent 0);
+  background-size: 2px 2px;
+  mix-blend-mode: overlay;
+}
+
+/* ---------- HUD ---------- */
+.hud-shadow {
+  text-shadow: 0 2px 0 rgba(0, 0, 0, 0.9), 0 0 14px rgba(255, 107, 26, 0.35);
+}
+.hud-panel {
+  background: linear-gradient(180deg, rgba(20, 14, 9, 0.82), rgba(13, 10, 7, 0.88));
+  border: 1px solid rgba(255, 107, 26, 0.35);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.8), inset 0 0 24px rgba(255, 107, 26, 0.06);
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
+}
+.hud-panel-r {
+  clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+}
+
+.hazard-tape {
+  background: repeating-linear-gradient(
+    -45deg,
+    #ffb42e 0 14px,
+    #14100c 14px 28px
+  );
+}
+
+@keyframes bannerIn {
+  0% { transform: translateY(26px) skewX(-8deg); opacity: 0; letter-spacing: 0.6em; }
+  14% { transform: translateY(0) skewX(-8deg); opacity: 1; letter-spacing: 0.12em; }
+  82% { transform: translateY(0) skewX(-8deg); opacity: 1; }
+  100% { transform: translateY(-18px) skewX(-8deg); opacity: 0; }
+}
+.wave-banner {
+  animation: bannerIn 2.6s cubic-bezier(0.2, 0.9, 0.2, 1) forwards;
+}
+
+@keyframes killIn {
+  0% { transform: translateX(40px); opacity: 0; }
+  10% { transform: translateX(0); opacity: 1; }
+  85% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.kill-entry {
+  animation: killIn 2.4s ease-out forwards;
+}
+
+@keyframes popIn {
+  0% { transform: scale(0.2); opacity: 0; }
+  60% { transform: scale(1.25); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.hitmarker {
+  animation: popIn 0.18s ease-out forwards;
+}
+
+@keyframes menuDrift {
+  0% { background-position: 0 0; }
+  100% { background-position: 56px 56px; }
+}
+.menu-grid {
+  background-image:
+    linear-gradient(rgba(255, 107, 26, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 107, 26, 0.07) 1px, transparent 1px);
+  background-size: 56px 56px;
+  animation: menuDrift 9s linear infinite;
+}
+
+@keyframes pulseGlow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.pulse-glow {
+  animation: pulseGlow 1.4s ease-in-out infinite;
+}
+
+@keyframes lowHp {
+  0%, 100% { opacity: 0.1; }
+  50% { opacity: 0.55; }
+}
+.lowhp-vignette {
+  background: radial-gradient(ellipse 90% 80% at 50% 50%, transparent 45%, rgba(255, 20, 10, 0.55) 100%);
+  animation: lowHp 0.9s ease-in-out infinite;
+}
+
+.keycap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 26px;
+  padding: 0 7px;
+  font-family: "Chakra Petch", monospace;
+  font-weight: 700;
+  font-size: 12px;
+  color: #ffd9a8;
+  background: linear-gradient(180deg, #2c2018, #17100a);
+  border: 1px solid rgba(255, 180, 46, 0.45);
+  border-bottom-width: 3px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.title-slant {
+  transform: skewX(-8deg);
+}
+
+button.menu-btn {
+  cursor: crosshair;
+  transition: transform 0.08s ease, background 0.12s ease, color 0.12s ease;
+}
+button.menu-btn:hover {
+  transform: translateY(-2px) skewX(-8deg);
+}
+button.menu-btn:active {
+  transform: translateY(1px) skewX(-8deg);
+}
