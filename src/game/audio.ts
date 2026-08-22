@@ -28,7 +28,7 @@ export class SFX {
     if (this.ctx.state === "suspended") this.ctx.resume();
   }
 
-  private noise(dur: number, opts: { type?: BiquadFilterType; freq?: number; q?: number; gain?: number; slideTo?: number; delay?: number } = {}) {
+  private noise(dur: number, opts: { type?: BiquadFilterType; freq?: number; q?: number; gain?: number; slideTo?: number; delay?: number; hp?: number } = {}) {
     if (!this.ctx || !this.master || !this.noiseBuf) return;
     const t0 = this.ctx.currentTime + (opts.delay ?? 0);
     const src = this.ctx.createBufferSource();
@@ -42,7 +42,16 @@ export class SFX {
     const g = this.ctx.createGain();
     g.gain.setValueAtTime(opts.gain ?? 0.3, t0);
     g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    src.connect(f).connect(g).connect(this.master);
+    if (opts.hp) {
+      /* band-limit the transient instead of high-passing it into a hiss */
+      const hpf = this.ctx.createBiquadFilter();
+      hpf.type = "highpass";
+      hpf.frequency.value = opts.hp;
+      hpf.Q.value = 0.6;
+      src.connect(hpf).connect(f).connect(g).connect(this.master);
+    } else {
+      src.connect(f).connect(g).connect(this.master);
+    }
     src.start(t0);
     src.stop(t0 + dur + 0.02);
   }
@@ -69,29 +78,34 @@ export class SFX {
   }
 
   pistol() {
-    /* muzzle crack — instant attack, gone in ~35ms */
-    this.noise(0.035, { type: "highpass", freq: 1900, gain: this.j(0.46) });
-    /* body — mid-band falling sweep */
-    this.noise(0.1, { freq: 2500, slideTo: 340, gain: this.j(0.5) });
+    /* crack — full-band impulse (band-limited, NOT high-passed), fast decay.
+       High-passing the transient is what made it hiss. */
+    this.noise(0.085, { hp: 320, freq: 4800 * this.j(1), gain: this.j(0.5) });
+    /* the "bang" — fixed mid-band body, no filter sweep (sweeps sound laser-y) */
+    this.noise(0.075, { hp: 90, freq: 1050 * this.j(1), gain: this.j(0.38) });
     /* chest thump */
-    this.tone(0.1, { type: "sine", freq: 150, slideTo: 52, gain: this.j(0.24) });
-    /* slide cycling back — a dry mechanical tick just after the report */
-    this.noise(0.038, { type: "bandpass", freq: 1900, q: 7, gain: 0.11, delay: 0.075 });
-    this.noise(0.03, { type: "bandpass", freq: 2700, q: 9, gain: 0.09, delay: 0.115 });
+    this.tone(0.055, { type: "sine", freq: 148 * this.j(1), slideTo: 46, gain: this.j(0.3) });
+    /* slide: clack back, lock forward */
+    this.noise(0.028, { type: "bandpass", freq: 1300 * this.j(1), q: 4.5, gain: 0.1, delay: 0.085 });
+    this.noise(0.022, { type: "bandpass", freq: 860 * this.j(1), q: 4, gain: 0.08, delay: 0.13 });
+    /* one quiet wall reflection — sells the factory space */
+    this.noise(0.07, { freq: 620, gain: 0.055 * this.j(1), delay: 0.1 });
   }
 
   shotgun() {
-    /* wide initial crack */
-    this.noise(0.055, { type: "highpass", freq: 1350, gain: this.j(0.52) });
-    /* the boom — broad lowpass sweep, this is the weight of it */
-    this.noise(0.34, { freq: 3300, slideTo: 105, gain: this.j(0.82) });
-    /* heavy mid body */
-    this.noise(0.42, { freq: 880, slideTo: 55, gain: this.j(0.6) });
+    /* crack — same band-limited impulse recipe, wider */
+    this.noise(0.06, { hp: 260, freq: 4000 * this.j(1), gain: this.j(0.48) });
+    /* the boom — this is the weight of it */
+    this.noise(0.32, { hp: 60, freq: 2600 * this.j(1), slideTo: 90, gain: this.j(0.78) });
+    /* heavy mid body — fixed cutoff, fast decay */
+    this.noise(0.16, { hp: 120, freq: 900 * this.j(1), gain: this.j(0.42) });
     /* deep thump + chamber resonance */
-    this.tone(0.3, { type: "sine", freq: 104, slideTo: 29, gain: this.j(0.6) });
-    this.tone(0.17, { type: "triangle", freq: 66, slideTo: 42, gain: 0.28, delay: 0.012 });
+    this.tone(0.28, { type: "sine", freq: 104 * this.j(1), slideTo: 28, gain: this.j(0.55) });
+    this.tone(0.17, { type: "triangle", freq: 64 * this.j(1), slideTo: 42, gain: 0.24, delay: 0.012 });
     /* spent shell hitting the floor plates a beat later */
-    this.noise(0.05, { type: "bandpass", freq: 3100, q: 8, gain: 0.07, delay: 0.16 });
+    this.noise(0.05, { type: "bandpass", freq: 3100 * this.j(1), q: 8, gain: 0.07, delay: 0.17 });
+    /* room reflection */
+    this.noise(0.1, { freq: 480, gain: 0.065, delay: 0.11 });
   }
 
   pump() {
