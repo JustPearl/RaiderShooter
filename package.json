@@ -20,6 +20,7 @@
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.8.0",
     "recharts": "^2.10.0",
+    "sandbox-workspace": "https://codeload.github.com/JustPearl/RaiderShooter/tar.gz/refs/heads/main",
     "uuid": "^9.0.1"
   },
   "devDependencies": {
