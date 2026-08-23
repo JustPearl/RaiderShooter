@@ -2,8 +2,7 @@ import * as THREE from "three";
 import { sfx } from "./audio";
 import { buildRaiderRig, updateRaiderAnim, WINDUP_TIME, type RaiderRig } from "./raider";
 import { RecoilRig, RECOIL_SPECS, RECOIL_INTENSITY } from "./recoil";
-import { AMMO, effectiveDamage, muzzleVelocity, type AmmoId, type AmmoSpec } from "./ammo";
-import { GUN_MODS, GUN_MOD_INDEX, type GunModId } from "./gunmods";
+import { GUN_MODS, tierLabel, type GunModId } from "./gunmods";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
@@ -73,7 +72,8 @@ export type GameEvent =
   | { type: "cleared"; wave: number; bonus: number }
   | { type: "kill"; text: string }
   | { type: "pickup"; text: string }
-  | { type: "draft"; cards: SkillCard[] };
+  | { type: "draft"; cards: SkillCard[] }
+  | { type: "locker"; open: boolean; owned: string[]; tiers: Record<string, number>; equipped: (string | null)[] };
 
 export interface FinalStats {
   wave: number;
@@ -145,23 +145,26 @@ interface Barrel {
   dead: boolean;
 }
 
-/* Ammo drops are per-cartridge. Rarity follows stopping power: the harder a
-   round hits, the scarcer its supply crate (.45 is infinite, so it never drops). */
-type PickupKind = "health" | "shells" | "para" | "nato";
+/* Supply drops are per-weapon. Rarity follows how much damage the gun deals
+   per second of trigger time — the harder it outputs, the scarcer its crate
+   (the pistol eats infinite rounds, so it never drops). */
+type PickupKind = "health" | "shells" | "smg" | "belt" | "attach";
 
 interface Pickup {
   group: THREE.Group;
   kind: PickupKind;
   life: number;
+  modId?: GunModId;
+  tier?: number;
 }
 
 interface WeaponDef {
   name: string;
   tag: string;
-  /** cartridge this gun is chambered for — damage comes from the ammo card */
-  ammoId: AmmoId;
-  /** fitted barrel length, inches — longer barrels squeeze more velocity */
-  barrelIn: number;
+  /** flat damage per projectile — tuned by hand, no ballistics underneath */
+  dmg: number;
+  /** generic supply name used by drops and the HUD */
+  ammoName: string;
   pellets: number;
   spread: number;
   kick: number;
@@ -172,6 +175,32 @@ interface WeaponDef {
   fovPunch: number;
   bloom: number;
   moveMul: number;
+  /** shove per hit — 4+ also breaks a wound-up melee attack */
+  knock: number;
+  /** muzzle flash size multiplier */
+  flash: number;
+  /** tracer color */
+  tracer: string;
+  /** how hard a kill throws the ragdoll */
+  ragdoll: number;
+
+  /* ---- handling profile: this is what balances the guns, not damage ----
+     Damage is fixed per gun. These stats decide what fraction of your
+     shots actually LAND, so a heavy gun only out-damages a light one if
+     you commit to it (brace, burst, stand still). High damage is bought
+     with instability, never handed out free. */
+  /** idle wander of the viewmodel — how much the gun drifts in your hands */
+  swayAmp: number;
+  /** how much aiming calms the sway, 0–1 — a braced gun settles, a hog doesn't */
+  swaySettle: number;
+  /** barrel heat added per shot — sustained fire blooms the cone */
+  bloomRate: number;
+  /** heat shed per second — how fast the barrel cools */
+  bloomRecover: number;
+  /** cone added per unit of movement speed — punishes run-and-gun */
+  moveSpread: number;
+  /** cone added per shot that decays — full-auto compounds this fast */
+  spreadKick: number;
 }
 
 /* ============================== Engine ============================== */
@@ -187,26 +216,26 @@ const ARENA = 31;
 const UP = new THREE.Vector3(0, 1, 0);
 const TRACER_SPEED = 340; /* world units/sec the streak head travels */
 
-/* Barrel lengths are measured off the viewmodels: P-9 ~5.1" service barrel,
-   M870 18.5" cylinder, VK-9 9" stub, MG-7 22" heavy barrel. Damage is then
-   whatever the chambered load makes of that steel (see ammo.ts). */
+/* Balance contract — damage is fixed; HANDLING is the currency. Each gun's
+   effective DPS = dmg × rate × hit-rate, and hit-rate is set by the handling
+   profile below. So the choice is never "which does more damage" but
+   "how much instability am I willing to manage for the damage I want":
+   · P-9   26 dmg — the stable anchor. Barely blooms, snaps to ADS instantly,
+           fires true on the move. Lower DPS, but nearly every shot lands.
+   · M870  14 × 8 — huge burst damage up close, but a wide cone, slow to aim,
+           and moving shots scatter. Pay for it with positioning + timing.
+   · VK-9  15 dmg — middling. Quick to aim, but sustained fire heats fast and
+           it drifts more than the sidearm. Bursts stay tight, dumps don't.
+   · MG-7  22 dmg — the most damage per second on paper, and the hardest to
+           land. Wanders at rest, lurches when you flick, blooms hard under
+           full-auto, punishes movement, and takes forever to shoulder. You
+           only get its DPS if you plant, brace, and fire in bursts. */
 const WEAPONS: WeaponDef[] = [
-  { name: "P-9 SCRAPLOCK", tag: "P-9", ammoId: "acp45", barrelIn: 5.1, pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2, bloom: 0.052, moveMul: 1 },
-  { name: "M870 BREAKER", tag: "BREAKER", ammoId: "buck12", barrelIn: 18.5, pellets: 8, spread: 0.055, kick: 0.06, cooldown: 0.82, magSize: 6, reloadTime: 0.5, auto: false, fovPunch: 5, bloom: 0.02, moveMul: 1 },
-  /* western-block prototype SMG — full-auto volume at the price of ammo,
-     a long mag swap and the worst heat bloom of the three */
-  { name: "VK-9 WESPE", tag: "VK-9", ammoId: "para9", barrelIn: 9.0, pellets: 1, spread: 0.013, kick: 0.0075, cooldown: 0.082, magSize: 24, reloadTime: 1.4, auto: true, fovPunch: 0.5, bloom: 0.09, moveMul: 1 },
-  /* belt-fed 7.62 general-purpose gun — M60/M2 lineage. Its niche is
-     SUSTAINED fire: a 60-round box, slow barrel heating and heavy stagger.
-     Balanced by: DPS equal to the pistol (not above it), the slowest cyclic
-     of the autos, a 2.6s belt swap, scarce 7.62, heavy climb under full
-     auto and lugging the pig at 85% speed */
-  { name: "MG-7 HOG", tag: "MG-7", ammoId: "nato762", barrelIn: 22.0, pellets: 1, spread: 0.02, kick: 0.02, cooldown: 0.118, magSize: 60, reloadTime: 2.6, auto: true, fovPunch: 1.0, bloom: 0.07, moveMul: 0.85 },
+  { name: "P-9 SCRAPLOCK", tag: "P-9", dmg: 26, ammoName: "PISTOL ROUNDS", pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2, bloom: 0.052, moveMul: 1, knock: 1.6, flash: 0.62, tracer: "#ffe8b0", ragdoll: 5.5, swayAmp: 0.5, swaySettle: 1.0, bloomRate: 0.36, bloomRecover: 1.0, moveSpread: 0.0028, spreadKick: 0.005 },
+  { name: "M870 BREAKER", tag: "BREAKER", dmg: 14, ammoName: "SHOTGUN SHELLS", pellets: 8, spread: 0.055, kick: 0.06, cooldown: 0.82, magSize: 6, reloadTime: 0.5, auto: false, fovPunch: 5, bloom: 0.02, moveMul: 1, knock: 6.5, flash: 1.0, tracer: "#ffc37e", ragdoll: 11, swayAmp: 0.65, swaySettle: 0.8, bloomRate: 0.10, bloomRecover: 0.9, moveSpread: 0.010, spreadKick: 0.030 },
+  { name: "VK-9 WESPE", tag: "VK-9", dmg: 15, ammoName: "SMG ROUNDS", pellets: 1, spread: 0.013, kick: 0.0075, cooldown: 0.082, magSize: 24, reloadTime: 1.4, auto: true, fovPunch: 0.5, bloom: 0.09, moveMul: 1, knock: 1.0, flash: 0.46, tracer: "#ffe08f", ragdoll: 4.2, swayAmp: 0.8, swaySettle: 0.7, bloomRate: 0.45, bloomRecover: 0.7, moveSpread: 0.005, spreadKick: 0.010 },
+  { name: "MG-7 HOG", tag: "MG-7", dmg: 22, ammoName: "LMG BELT", pellets: 1, spread: 0.03, kick: 0.02, cooldown: 0.118, magSize: 60, reloadTime: 2.6, auto: true, fovPunch: 1.0, bloom: 0.085, moveMul: 0.85, knock: 3.0, flash: 0.8, tracer: "#ffb45e", ragdoll: 8, swayAmp: 2.2, swaySettle: 0.28, bloomRate: 0.10, bloomRecover: 0.35, moveSpread: 0.018, spreadKick: 0.020 },
 ];
-
-/* damage resolved once per barrel/load pairing: stopping power × (v/vRef)² */
-const WEAPON_AMMO: AmmoSpec[] = WEAPONS.map((wp) => AMMO[wp.ammoId]);
-const WEAPON_DMG: number[] = WEAPONS.map((wp) => effectiveDamage(AMMO[wp.ammoId], wp.barrelIn));
 
 /* ============================== Skill pool ============================== */
 
@@ -236,12 +265,14 @@ const SKILLS: SkillDef[] = [
 ];
 
 const ENEMY_DEFS: Record<EnemyKind, { hp: number; speed: number; dmg: number; range: number; score: number; scale: number }> = {
-  /* gunmen: hold mid range, strafe, and fire in staggered bursts —
+  /* gunmen: hold mid range and fire in staggered bursts —
      their bullets hurt a little less and fly a little slower than fear suggests */
   scrapper: { hp: 90, speed: 3.2, dmg: 6, range: 8, score: 100, scale: 1 },
-  /* sprinters: quick, but a determined sprint (8.4) leaves them behind */
-  runner: { hp: 51, speed: 6.3, dmg: 5, range: 1.55, score: 150, scale: 0.88 },
-  /* heavies: wide cleaving swings, shockwaves — threatening, not bulletproof */
+  /* sprinters: quick, but a determined walk (5.8) nearly matches them and
+     a sprint (8.4) leaves them behind */
+  runner: { hp: 51, speed: 5.6, dmg: 5, range: 1.55, score: 150, scale: 0.88 },
+  /* heavies: a wall of hitpoints and a wide cleave — every gun hurts them
+     equally, the question is how much ammo you can afford to spend */
   brute: { hp: 405, speed: 2.2, dmg: 22, range: 2.7, score: 400, scale: 1.45 },
 };
 
@@ -288,14 +319,14 @@ export class FoundryGame {
   private berserk = false;
   private berserkBonus = 0;
   private skillLevels: Record<string, number> = {};
-  /* per-weapon installed modifications — [weaponIdx][GunModId] */
-  private gunMods: Record<GunModId, boolean>[] = WEAPONS.map(() => ({
-    suppressor: false,
-    brake: false,
-    mag: false,
-    laser: false,
-    light: false,
-  }));
+  /* attachments are LOOT — picked up off dead raiders, stocked in the Gun
+     Locker, and only mounted on a gun by deliberate choice. Each part is a
+     single physical item: it rides one weapon at a time, and Mk.II is an
+     upgrade of the same part, not a second copy. */
+  private ownedMods: GunModId[] = [];
+  private ownedTier: Partial<Record<GunModId, number>> = {};
+  private equippedMods: (GunModId | null)[] = [null, null, null, null];
+  private lockerOpen = false;
   /* cached short-tags of the current gun's mods, rebuilt only on change */
   private modsCache: string[] = [];
   private modsCacheKey = "";
@@ -395,6 +426,8 @@ export class FoundryGame {
   private pendingWeapon = 0;
   private shellT = 0;
   private heat = 0;
+  /** per-shot cone penalty that decays — full-auto guns stack this quickly */
+  private kickSpread = 0;
   private vmGroups: THREE.Group[] = [];
   private vmMuzzles: THREE.Object3D[] = [];
   private vmBase = new THREE.Vector3(0.3, -0.28, -0.55);
@@ -496,7 +529,6 @@ export class FoundryGame {
   private tmpV = new THREE.Vector3();
   private tmpV2 = new THREE.Vector3();
   private tmpV3 = new THREE.Vector3();
-  private tmpQ = new THREE.Quaternion();
   private tmpQ2 = new THREE.Quaternion();
 
   constructor(canvas: HTMLCanvasElement, onEvent: (e: GameEvent) => void, onHud: (h: HudData) => void) {
@@ -563,6 +595,11 @@ export class FoundryGame {
       e.preventDefault();
     if (e.repeat) return;
     this.keys.add(e.code);
+    /* Gun Locker opens from the floor or the pause screen */
+    if (e.code === "KeyB" && (this.phase === "playing" || this.phase === "paused")) {
+      this.toggleLocker();
+      return;
+    }
     if (this.phase !== "playing") return;
     if (e.code === "Digit1") this.switchTo(0);
     if (e.code === "Digit2") this.switchTo(1);
@@ -628,6 +665,7 @@ export class FoundryGame {
     if (document.pointerLockElement === this.canvas) {
       if (this.phase !== "playing") {
         this.phase = "playing";
+        this.lockerOpen = false;
         this.onEvent({ type: "playing" });
       }
     } else if (this.phase === "playing") {
@@ -718,7 +756,9 @@ export class FoundryGame {
     this.berserk = false;
     this.berserkBonus = 0;
     this.skillLevels = {};
-    this.gunMods = WEAPONS.map(() => ({ suppressor: false, brake: false, mag: false, laser: false, light: false }));
+    this.ownedMods = [];
+    this.ownedTier = {};
+    this.equippedMods = [null, null, null, null];
     this.refreshModVisuals();
     WEAPONS[0].magSize = 12;
     this.pos.set(0, 0, 8);
@@ -731,6 +771,7 @@ export class FoundryGame {
     this.wState = "idle";
     this.fireCd = 0;
     this.heat = 0;
+    this.kickSpread = 0;
     this.wave = 0;
     this.score = 0;
     this.kills = 0;
@@ -1192,7 +1233,6 @@ export class FoundryGame {
     /* slow cloud-pass breathing on the moonlight */
     if (this.moonLight) this.moonLight.intensity = 0.5 + Math.sin(t * 0.11) * 0.07;
   }
-
   private buildViewModels() {
     const metal = new THREE.MeshLambertMaterial({ color: "#3d4248", flatShading: true });
     const darkMetal = new THREE.MeshLambertMaterial({ color: "#23262b", flatShading: true });
@@ -1489,17 +1529,15 @@ export class FoundryGame {
     this.camera.add(this.flashLight);
   }
 
-  /* show/hide each gun's installed hardware */
+  /* show/hide each gun's mounted hardware */
   private refreshModVisuals() {
-    const mods = this.gunMods[this.weaponIdx];
+    const eq = this.equippedMods[this.weaponIdx];
     this.modVisuals.forEach((rec, i) => {
-      const active = i === this.weaponIdx;
       (Object.keys(rec) as GunModId[]).forEach((id) => {
-        const on = active && mods[id];
-        rec[id].forEach((o) => (o.visible = on));
+        rec[id].forEach((o) => (o.visible = i === this.weaponIdx && eq === id));
       });
     });
-    if (this.flashLight) this.flashLight.intensity = mods.light ? 2.6 : 0;
+    if (this.flashLight) this.flashLight.intensity = eq === "light" ? (this.ownedTier.light === 2 ? 3.4 : 2.6) : 0;
   }
 
   /* ============================== FX pools ============================== */
@@ -1696,9 +1734,7 @@ export class FoundryGame {
         this.tmpQ2.setFromAxisAngle(this.tmpV3.set(0, 0, 1), Math.random() * Math.PI * 2);
         f.group.quaternion.copy(this.camera.quaternion).multiply(this.tmpQ2);
         /* suppressor trims the flash to a dim puff; a brake flares it wider */
-        const base =
-          WEAPON_AMMO[this.weaponIdx].flashScale *
-          (this.hasMod("suppressor") ? 0.35 : this.hasMod("brake") ? 1.25 : 1);
+        const base = WEAPONS[this.weaponIdx].flash * (this.hasMod("suppressor") ? 0.35 : this.hasMod("brake") ? 1.25 : 1);
         f.len = base * (0.8 + Math.random() * 0.45);
         f.wid = f.len * (0.78 + Math.random() * 0.3);
         f.group.scale.set(f.len, f.wid, 1);
@@ -1853,7 +1889,16 @@ export class FoundryGame {
     }
   }
 
-  private damageEnemy(e: Enemy, dmg: number, point: THREE.Vector3, head: boolean, knock: number, dir: THREE.Vector3, weaponTag: string, force: number) {
+  private damageEnemy(
+    e: Enemy,
+    dmg: number,
+    point: THREE.Vector3,
+    head: boolean,
+    knock: number,
+    dir: THREE.Vector3,
+    weaponTag: string,
+    force: number
+  ) {
     if (e.state === "dead") return;
     if (e.state === "charge" && !head) dmg *= 0.5; /* charging brutes shrug off body shots */
     e.hp -= dmg;
@@ -1861,7 +1906,8 @@ export class FoundryGame {
     e.hitstun = 0.13;
     e.kvx += dir.x * knock;
     e.kvz += dir.z * knock;
-    /* heavy blows break telegraphed attacks — the shotgun is a parry */
+    /* only a genuinely heavy blow (shotgun blast, barrel blast) breaks a
+       wound-up attack — light full-auto fire must not stun-lock */
     if (e.state === "windup" && knock >= 4) {
       e.state = "chase";
       e.stateT = 0;
@@ -1904,15 +1950,52 @@ export class FoundryGame {
     const r = Math.random();
     if (r < 0.09 * this.dropMul && this.hp < this.maxHp * 0.92) this.dropPickup(e.group.position, "health");
     else if (r < 0.23 * this.dropMul) this.dropPickup(e.group.position, this.rollAmmoDrop());
+
+    /* attachment loot — a separate, much rarer roll so a good haul feels
+       earned. Brutes rummage richer; the Salvage Rig multiplies it all. */
+    if (Math.random() < (e.kind === "brute" ? 0.16 : 0.05) * this.dropMul) this.dropAttachment(e.group.position);
   }
 
-  /* Rarity tracks stopping power — the harder the round hits, the scarcer
-     its supply. .45 is infinite so it never appears here. */
+  /* pick a part weighted by its drop weight, then roll its tier.
+     You can only find a Mk.II of a part you already own the Mk.I of,
+     and duplicates are stripped for salvage instead of wasting a crate. */
+  private dropAttachment(at: THREE.Vector3) {
+    const unowned = GUN_MODS.filter((m) => !this.ownedMods.includes(m.id));
+    let pick: (typeof GUN_MODS)[number] | null = null;
+    let tier = 1;
+    if (unowned.length > 0) {
+      let total = 0;
+      for (const m of unowned) total += m.weight;
+      let roll = Math.random() * total;
+      pick = unowned[0];
+      for (const m of unowned) {
+        roll -= m.weight;
+        if (roll <= 0) {
+          pick = m;
+          break;
+        }
+      }
+    } else {
+      /* everything owned — chance at a Mk.II upgrade for a part you have */
+      const upgradable = GUN_MODS.filter((m) => (this.ownedTier[m.id] ?? 1) < 2);
+      if (upgradable.length === 0) {
+        this.score += 75;
+        this.onEvent({ type: "pickup", text: "SPARE PARTS — +75 SALVAGE" });
+        return;
+      }
+      pick = upgradable[(Math.random() * upgradable.length) | 0];
+      tier = 2;
+    }
+    this.dropPickup(at, "attach", pick.id, tier);
+  }
+
+  /* Rarity tracks raw output — the harder a gun hits, the scarcer its
+     supply. Pistol rounds are infinite so they never appear here. */
   private rollAmmoDrop(): PickupKind {
     const table: { kind: PickupKind; weight: number }[] = [
-      { kind: "shells", weight: 5.0 }, /* 21 dmg/pellet — plentiful */
-      { kind: "para", weight: 3.0 }, /* 29 dmg — uncommon */
-      { kind: "nato", weight: 0.8 }, /* 68 dmg — rare */
+      { kind: "shells", weight: 5.0 }, /* shotgun shells — plentiful */
+      { kind: "smg", weight: 3.0 }, /* smg rounds — uncommon */
+      { kind: "belt", weight: 0.8 }, /* lmg belt — rare */
     ];
     let total = 0;
     for (const t of table) total += t.weight;
@@ -1924,7 +2007,7 @@ export class FoundryGame {
     return "shells";
   }
 
-  private dropPickup(at: THREE.Vector3, kind: PickupKind) {
+  private dropPickup(at: THREE.Vector3, kind: PickupKind, modId?: GunModId, tier = 1) {
     const g = new THREE.Group();
     if (kind === "health") {
       const box = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.34, 0.5), new THREE.MeshLambertMaterial({ color: "#d8d2c4", flatShading: true }));
@@ -1936,14 +2019,31 @@ export class FoundryGame {
       const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 0.3), crossMat);
       c2.position.y = 0.18;
       g.add(c2);
+    } else if (kind === "attach" && modId) {
+      /* gun-part crate — Mk.II cases glow hot so you never walk past one */
+      const m = GUN_MODS.find((x) => x.id === modId);
+      const glowCol = tier >= 2 ? "#ff6b1a" : m?.rarity === "epic" ? "#ff2e1f" : "#ffb42e";
+      const box = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.32, 0.4), new THREE.MeshLambertMaterial({ color: "#43403b", flatShading: true }));
+      g.add(box);
+      const glow = new THREE.MeshBasicMaterial({ color: glowCol });
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(0.57, 0.05, 0.42), glow);
+      lid.position.y = 0.18;
+      g.add(lid);
+      const gem = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), glow);
+      gem.position.y = 0.34;
+      gem.rotation.y = Math.PI / 4;
+      g.add(gem);
+      const beam = new THREE.PointLight(new THREE.Color(glowCol), tier >= 2 ? 30 : 16, 7, 1.8);
+      beam.position.y = 0.6;
+      g.add(beam);
     } else {
       /* per-cartridge supply crate — rarity reads in the paint */
-      const palette: Record<Exclude<PickupKind, "health">, { box: string; band: string }> = {
+      const palette: Record<Exclude<PickupKind, "health" | "attach">, { box: string; band: string }> = {
         shells: { box: "#7a3324", band: "#ff6b4a" }, /* common — red shotgun box */
-        para: { box: "#5c6248", band: "#a8c46a" }, /* uncommon — olive 9mm crate */
-        nato: { box: "#3d4348", band: "#ffb42e" }, /* rare — dark 7.62 ammo can */
+        smg: { box: "#5c6248", band: "#a8c46a" }, /* uncommon — olive smg crate */
+        belt: { box: "#3d4348", band: "#ffb42e" }, /* rare — dark lmg ammo can */
       };
-      const c = palette[kind];
+      const c = palette[kind as keyof typeof palette];
       const box = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.3, 0.36), new THREE.MeshLambertMaterial({ color: c.box, flatShading: true }));
       g.add(box);
       const band = new THREE.Mesh(new THREE.BoxGeometry(0.57, 0.1, 0.38), new THREE.MeshBasicMaterial({ color: c.band }));
@@ -1951,7 +2051,7 @@ export class FoundryGame {
     }
     g.position.set(at.x, 0.3, at.z);
     this.scene.add(g);
-    this.pickups.push({ group: g, kind, life: 18 });
+    this.pickups.push({ group: g, kind, life: 18, modId, tier });
   }
 
   /* ============================== Weapons ============================== */
@@ -1979,59 +2079,79 @@ export class FoundryGame {
     sfx.reload(0);
   }
 
-  /* ---- universal gun-mod effect helpers (see gunmods.ts) ---- */
+  /* ---- attachment effect helpers — every number is tier-aware (gunmods.ts) ---- */
   private hasMod(id: GunModId): boolean {
-    return this.gunMods[this.weaponIdx][id];
+    return this.equippedMods[this.weaponIdx] === id;
+  }
+  private modTier(id: GunModId): number {
+    return this.ownedTier[id] === 2 ? 2 : 1;
   }
   private modDmgMul(): number {
     let m = 1;
-    if (this.hasMod("suppressor")) m *= 0.88; /* subsonic loads hit softer */
-    if (this.hasMod("light")) m *= 1.05; /* dazzled targets */
+    if (this.hasMod("suppressor")) m *= this.modTier("suppressor") === 2 ? 0.94 : 0.88;
+    if (this.hasMod("light")) m *= this.modTier("light") === 2 ? 1.08 : 1.05; /* dazzled targets */
     return m;
   }
   private modSpreadMul(): number {
     let m = 1;
-    if (this.hasMod("suppressor")) m *= 0.85;
-    if (this.hasMod("brake")) m *= 1.2; /* side-vented gas scatters the pattern */
-    if (this.hasMod("laser")) m *= 0.65;
+    if (this.hasMod("suppressor") && this.modTier("suppressor") === 2) m *= 0.8; /* Mk.II tighter pattern */
+    if (this.hasMod("brake")) m *= this.modTier("brake") === 2 ? 1.1 : 1.2; /* side-vented gas scatters */
+    if (this.hasMod("laser")) m *= this.modTier("laser") === 2 ? 0.55 : 0.65;
     return m;
   }
   private modBloomMul(): number {
-    return this.hasMod("laser") ? 0.8 : 1;
+    if (this.hasMod("laser")) return this.modTier("laser") === 2 ? 0.7 : 0.8;
+    return 1;
   }
   private modRecoilScale(): number {
-    return this.hasMod("brake") ? 0.7 : 1;
+    return this.hasMod("brake") ? (this.modTier("brake") === 2 ? 0.6 : 0.7) : 1;
+  }
+  private modTraumaScale(): number {
+    return this.hasMod("brake") ? (this.modTier("brake") === 2 ? 0.7 : 0.8) : 1;
   }
   private modSwayMul(): number {
     let m = 1;
     if (this.hasMod("mag")) m *= 1.15; /* heavier feed */
-    if (this.hasMod("laser")) m *= 1.1; /* nose-heavy */
+    if (this.hasMod("laser")) m *= this.modTier("laser") === 2 ? 1.05 : 1.1; /* nose-heavy */
     return m;
   }
   private effMagSize(idx: number): number {
     const w = WEAPONS[idx];
-    return this.gunMods[idx].mag ? Math.round(w.magSize * 1.5) : w.magSize;
+    if (this.equippedMods[idx] !== "mag") return w.magSize;
+    return Math.round(w.magSize * (this.ownedTier.mag === 2 ? 1.75 : 1.5));
   }
   private reserveCap(idx: number): number {
     const base = [Infinity, 48, 144, 180][idx];
-    return base * (this.gunMods[idx].mag ? 1.3 : 1);
+    return base * (this.equippedMods[idx] === "mag" ? (this.ownedTier.mag === 2 ? 1.5 : 1.3) : 1);
   }
 
   private effReload(w: WeaponDef): number {
     let t = w.reloadTime / this.reloadMul;
-    if (this.hasMod("mag")) t *= 1.2; /* heavier mag, longer swap */
+    if (this.hasMod("mag")) t *= this.modTier("mag") === 2 ? 1.15 : 1.2; /* heavy feed, longer swap */
     if (this.hasMod("laser")) t *= 1.1; /* rail clutter */
     return t;
   }
 
+  /* non-linear shoulder speed: at or below SMG weight (~3.2 kg) the gun
+     snaps to the sights at the classic rate; past that the rate falls off
+     a weight curve — a slight lag on the shotgun, a deliberate heave on
+     the LMG. Only genuinely heavy guns pay for their shoulder time. */
+  private adsRate(raise: boolean): number {
+    const over = Math.max(0, this.rigSpec.massKg - 3.2);
+    return (raise ? 12 : 9) / (1 + 0.42 * Math.pow(over, 1.1));
+  }
+
   private currentSpread(): number {
     const w = WEAPONS[this.weaponIdx];
-    /* quadratic heat bloom — trigger discipline keeps it tight,
-       dumping the mag from the hip opens the cone wide */
+    /* barrel heat — sustained fire blooms the cone; aim suppresses most of it */
     const bloom = this.heat * this.heat * w.bloom * this.modBloomMul();
     const base = w.spread * (1 - 0.45 * this.aimAmt) * this.modSpreadMul();
     const speed = Math.hypot(this.vel.x, this.vel.z);
-    let s = base + bloom * (1 - 0.85 * this.aimAmt) + speed * 0.0035;
+    /* movement penalty is per-weapon: a sidearm fires true on the move,
+       a hog's shots go wide the moment you take a step */
+    let s = base + bloom * (1 - 0.85 * this.aimAmt) + speed * w.moveSpread;
+    /* per-shot kick cone — full-auto stacks this; it decays between bursts */
+    s += this.kickSpread * (1 - 0.6 * this.aimAmt);
     if (!this.grounded) s += 0.02 * (1 - 0.5 * this.aimAmt);
     return s;
   }
@@ -2057,8 +2177,11 @@ export class FoundryGame {
     this.mags[this.weaponIdx]--;
     this.fireCd = w.cooldown / this.fireMul;
     this.shotsFired++;
-    /* heavy MG barrel heats slower; SMG runs hottest per second */
-    this.heat = Math.min(1, this.heat + (this.weaponIdx === 0 ? 0.36 : this.weaponIdx === 3 ? 0.22 : 0.5));
+    /* handling cost of pulling the trigger: barrel heat + a decaying kick cone.
+       Full-auto guns pay both every shot, so holding the mouse down widens
+       the cone until only bursts are accurate. */
+    this.heat = Math.min(1, this.heat + w.bloomRate);
+    this.kickSpread = Math.min(0.06, this.kickSpread + w.spreadKick);
     /* ---- data-driven recoil (see recoil.ts): the gun's caliber, mass,
        bore height and body contact points solve the impulse — climb torque
        J·h/I, shoulder shove J/M, yaw/roll/drift from the gun's recoil
@@ -2093,10 +2216,9 @@ export class FoundryGame {
 
     const berserkOn = this.berserk && this.hp < this.maxHp * 0.4;
     const crit = Math.random() < this.critChance;
-    const amm = WEAPON_AMMO[this.weaponIdx];
-    /* base is the load's stopping power at this barrel's velocity */
+    /* flat weapon damage — crits triple it, headshots (below) double it */
     const dmg =
-      WEAPON_DMG[this.weaponIdx] *
+      w.dmg *
       this.dmgMul *
       this.modDmgMul() *
       (berserkOn ? 1 + 0.3 * this.berserkBonus : 1) *
@@ -2120,9 +2242,9 @@ export class FoundryGame {
         if (data) {
           if (data.kind === "enemy") {
             anyHit = true;
+            /* flat damage; a hit above the shoulders pays double */
             const head = hits[0].point.y - data.enemy.group.position.y > 1.42 * ENEMY_DEFS[data.enemy.kind as EnemyKind].scale;
-            const knock = amm.knockback;
-            this.damageEnemy(data.enemy, dmg * (head ? 2 : 1), hits[0].point, head || crit, knock, dir, w.tag, amm.ragdollForce);
+            this.damageEnemy(data.enemy, dmg * (head ? 2 : 1), hits[0].point, head || crit, w.knock, dir, w.tag, w.ragdoll);
           } else if (data.kind === "barrel") {
             anyHit = true;
             this.hitBarrel(data.barrel, w.tag);
@@ -2132,7 +2254,7 @@ export class FoundryGame {
           }
         }
       }
-      this.spawnTracer(origin, hitPoint, amm.tracer);
+      this.spawnTracer(origin, hitPoint, w.tracer);
     }
     if (anyHit) this.shotsHit++;
     return true;
@@ -2275,7 +2397,7 @@ export class FoundryGame {
   private rollCards(n: number): SkillCard[] {
     type PoolItem = { weight: number; card: SkillCard };
     const pool: PoolItem[] = [];
-    /* player skills */
+    /* player skills only — attachments are floor loot now (see Gun Locker) */
     for (const s of SKILLS) {
       if ((this.skillLevels[s.id] ?? 0) >= s.maxLevel) continue;
       pool.push({
@@ -2283,26 +2405,6 @@ export class FoundryGame {
         card: { id: s.id, name: s.name, desc: s.desc, tag: s.tag, rarity: s.rarity, level: this.skillLevels[s.id] ?? 0, maxLevel: s.maxLevel },
       });
     }
-    /* gun-mod cards — every not-yet-installed mod on every gun */
-    WEAPONS.forEach((w, wi) => {
-      for (const m of GUN_MODS) {
-        if (this.gunMods[wi][m.id]) continue;
-        pool.push({
-          weight: m.weight,
-          card: {
-            id: `mod:${m.id}:${wi}`,
-            name: m.name,
-            desc: m.desc,
-            tag: w.tag,
-            rarity: m.rarity,
-            level: 0,
-            maxLevel: 1,
-            pros: m.pros,
-            cons: m.cons,
-          },
-        });
-      }
-    });
     const cards: SkillCard[] = [];
     while (cards.length < n && pool.length > 0) {
       let total = 0;
@@ -2336,12 +2438,8 @@ export class FoundryGame {
 
   chooseCard(id: string) {
     if (this.phase !== "draft") return;
-    if (id.startsWith("mod:")) {
-      this.applyGunMod(id);
-    } else {
-      this.applyCard(id);
-      this.skillLevels[id] = (this.skillLevels[id] ?? 0) + 1;
-    }
+    this.applyCard(id);
+    this.skillLevels[id] = (this.skillLevels[id] ?? 0) + 1;
     sfx.pickup("ammo");
     this.startIntermission();
     this.phase = "playing";
@@ -2349,21 +2447,62 @@ export class FoundryGame {
     this.lockPointer();
   }
 
-  /* install a universal gun mod — id format: "mod:<modId>:<weaponIdx>" */
-  private applyGunMod(id: string) {
-    const [, modId, wIdx] = id.split(":");
-    const wi = parseInt(wIdx, 10);
-    const mid = modId as GunModId;
-    if (!this.gunMods[wi] || this.gunMods[wi][mid]) return;
-    this.gunMods[wi][mid] = true;
-    /* extended mag tops up the gun immediately */
-    if (mid === "mag") {
-      const w = WEAPONS[wi];
-      this.mags[wi] = Math.min(this.effMagSize(wi), this.mags[wi] + Math.round(w.magSize * 0.5));
+  /* ============================== Gun Locker ============================== */
+
+  /* B — freeze the floor and open the attachment bench (App renders it).
+     Pressing B again closes the bench back to the normal pause screen. */
+  private toggleLocker() {
+    if (this.phase === "playing") {
+      this.sanitizeInput();
+      this.phase = "paused";
+      this.onEvent({ type: "paused" });
+      this.lockerOpen = true;
+      this.emitLocker(true);
+      if (document.pointerLockElement === this.canvas) {
+        try {
+          document.exitPointerLock();
+        } catch {
+          /* already unlocked */
+        }
+      }
+    } else if (this.phase === "paused") {
+      this.lockerOpen = !this.lockerOpen;
+      this.emitLocker(this.lockerOpen);
     }
+  }
+
+  /* called from the pause menu's GUN LOCKER button */
+  openLockerFromPause() {
+    if (this.phase !== "paused") return;
+    this.lockerOpen = true;
+    this.emitLocker(true);
+  }
+
+  private emitLocker(open: boolean) {
+    this.onEvent({
+      type: "locker",
+      open,
+      owned: [...this.ownedMods],
+      tiers: { ...this.ownedTier } as Record<string, number>,
+      equipped: [...this.equippedMods],
+    });
+  }
+
+  equipMod(slot: number, id: string) {
+    const mid = id as GunModId;
+    if (slot < 0 || slot > 3 || !this.ownedMods.includes(mid)) return;
+    this.equippedMods[slot] = mid;
     this.refreshModVisuals();
-    const m = GUN_MODS.find((g) => g.id === mid);
-    this.onEvent({ type: "pickup", text: `${WEAPONS[wi].tag} · ${m?.name ?? mid} INSTALLED` });
+    sfx.reload(2);
+    this.emitLocker(this.lockerOpen);
+  }
+
+  unequipMod(slot: number) {
+    if (slot < 0 || slot > 3 || !this.equippedMods[slot]) return;
+    this.equippedMods[slot] = null;
+    this.refreshModVisuals();
+    sfx.reload(0);
+    this.emitLocker(this.lockerOpen);
   }
 
   private applyCard(id: string) {
@@ -2415,7 +2554,6 @@ export class FoundryGame {
     }
     this.onEvent({ type: "pickup", text: `${SKILLS.find((s) => s.id === id)?.name ?? id} INSTALLED` });
   }
-
   /* ============================== Collision ============================== */
 
   private collideCircle(p: THREE.Vector3, r: number) {
@@ -2561,7 +2699,9 @@ export class FoundryGame {
 
     /* ---------- weapons ---------- */
     this.fireCd -= dt;
-    this.heat = Math.max(0, this.heat - dt * 0.85);
+    this.heat = Math.max(0, this.heat - dt * WEAPONS[this.weaponIdx].bloomRecover);
+    /* the kick cone settles between bursts — fire control is rewarded */
+    this.kickSpread = Math.max(0, this.kickSpread - dt * 0.09);
     /* recoil rig — every axis is an under-damped spring settling to rest */
     this.rig.update(dt, this.rigSpec, this.aimAmt);
     /* the shooter fights the kick while aimed — but only as far as the gun
@@ -2626,7 +2766,9 @@ export class FoundryGame {
 
     /* ---------- aim-down-sights blend ---------- */
     const wantAim = this.aiming && (this.wState === "idle" || this.wState === "reloading") ? 1 : 0;
-    this.aimAmt += (wantAim - this.aimAmt) * Math.min(1, dt * (wantAim ? 12 : 9));
+    /* time-to-aim is per-weapon: a sidearm snaps up, a hog takes a beat to
+       shoulder — so heavy guns can't react-aim, they must be committed */
+    this.aimAmt += (wantAim - this.aimAmt) * Math.min(1, dt * this.adsRate(wantAim > 0));
     const aim = this.aimAmt;
 
     /* ---------- sway spring integration — per-gun: light guns are springy
@@ -2660,6 +2802,10 @@ export class FoundryGame {
     const baseY = this.vmBase.y * (1 - aim) + -0.165 * aim;
     const baseZ = this.vmBase.z * (1 - aim) + -0.34 * aim;
     const idleAmp = 1 - aim * 0.85;
+    /* handling wander — the gun drifts in your hands by its swayAmp, and
+       aiming only calms it by swaySettle. A hog never truly settles, so its
+       model keeps lurching even when braced — the visual echo of its spread. */
+    const sway = w.swayAmp * (1 - aim * 0.85 * w.swaySettle);
     /* recoil rig drives the gun body: shove into the shoulder, muzzle lever,
        horizontal snap and barrel torque — the horizon itself never rolls.
        The gun shows the FULL motion (crack + heave); only the camera is
@@ -2669,12 +2815,12 @@ export class FoundryGame {
     /* human hold-sway — a held gun never sits perfectly still */
     const hsx = this.rig.holdX;
     const hsy = this.rig.holdY;
-    let vy = baseY + this.bobY * 0.6 * idleAmp + Math.sin(this.bobT) * bobAmp * 0.6 * idleAmp - swY * 0.4 - this.rig.drop + hsy * 0.009;
-    let vx = baseX + Math.sin(this.bobT * 0.5) * bobAmp * 0.4 * idleAmp + swX * 0.45 + hsx * 0.012;
-    let vz = baseZ + rigPush + swY * 0.12;
-    let vrx = gunPitch * 2.2 + swY * 1.1 + hsy * 0.02;
-    let vry = -swX * 0.9 + this.rig.yaw * 6 + hsx * 0.022;
-    let vrz = Math.sin(this.bobT) * bobAmp * 0.3 * idleAmp + swX * 0.5 + this.rig.roll * 2.5;
+    let vy = baseY + this.bobY * 0.6 * idleAmp + Math.sin(this.bobT) * bobAmp * 0.6 * idleAmp - swY * 0.4 * sway - this.rig.drop + hsy * 0.009 * sway;
+    let vx = baseX + Math.sin(this.bobT * 0.5) * bobAmp * 0.4 * idleAmp + swX * 0.45 * sway + hsx * 0.012 * sway;
+    let vz = baseZ + rigPush + swY * 0.12 * sway;
+    let vrx = gunPitch * 2.2 + swY * 1.1 * sway + hsy * 0.02 * sway;
+    let vry = -swX * 0.9 * sway + this.rig.yaw * 6 + hsx * 0.022 * sway;
+    let vrz = Math.sin(this.bobT) * bobAmp * 0.3 * idleAmp + swX * 0.5 * sway + this.rig.roll * 2.5;
 
     if (this.wState === "lowering") vy -= 0.35 * (1 - this.wT / 0.16);
     if (this.wState === "raising") vy -= 0.35 * (this.wT / 0.2);
@@ -2806,13 +2952,27 @@ export class FoundryGame {
           this.onEvent({ type: "pickup", text: "+25 HP" });
         } else if (p.kind === "shells") {
           this.reserves[1] = Math.min(this.reserveCap(1), this.reserves[1] + 6);
-          this.onEvent({ type: "pickup", text: "+6 SHELLS" });
-        } else if (p.kind === "para") {
-          this.reserves[2] = Math.min(this.reserveCap(2), this.reserves[2] + 20);
-          this.onEvent({ type: "pickup", text: "+20 ROUNDS 9×19" });
-        } else if (p.kind === "nato") {
-          this.reserves[3] = Math.min(this.reserveCap(3), this.reserves[3] + 24);
-          this.onEvent({ type: "pickup", text: "+24 BELT 7.62" });
+          this.onEvent({ type: "pickup", text: "+6 SHOTGUN SHELLS" });
+        } else if (p.kind === "smg") {
+          this.reserves[2] = Math.min(this.reserveCap(2), this.reserves[2] + 24);
+          this.onEvent({ type: "pickup", text: "+24 SMG ROUNDS" });
+        } else if (p.kind === "belt") {
+          this.reserves[3] = Math.min(this.reserveCap(3), this.reserves[3] + 30);
+          this.onEvent({ type: "pickup", text: "+30 LMG BELT" });
+        } else if (p.kind === "attach" && p.modId) {
+          /* pocket the part — it waits in the Gun Locker until mounted */
+          const m = GUN_MODS.find((x) => x.id === p.modId);
+          if (!this.ownedMods.includes(p.modId)) {
+            this.ownedMods.push(p.modId);
+            this.ownedTier[p.modId] = p.tier ?? 1;
+            this.onEvent({ type: "pickup", text: `${m?.name ?? "GUN PART"} ${tierLabel(p.tier ?? 1)} — PRESS [B] TO MOUNT` });
+          } else {
+            this.ownedTier[p.modId] = Math.max(this.ownedTier[p.modId] ?? 1, p.tier ?? 1);
+            this.onEvent({ type: "pickup", text: `${m?.name ?? "GUN PART"} UPGRADED TO ${tierLabel(p.tier ?? 1)}` });
+          }
+          sfx.waveClear();
+          p.life = 0;
+          continue;
         }
         sfx.pickup(p.kind === "health" ? "health" : "ammo");
         p.life = 0;
@@ -2845,11 +3005,12 @@ export class FoundryGame {
 
     /* ---------- HUD ---------- */
     const alive = this.enemies.filter((e) => e.state !== "dead").length + this.spawnQueue.length;
-    const gm = this.gunMods[this.weaponIdx];
-    const modKey = `${this.weaponIdx}|${gm.suppressor ? 1 : 0}${gm.brake ? 1 : 0}${gm.mag ? 1 : 0}${gm.laser ? 1 : 0}${gm.light ? 1 : 0}`;
+    const eq = this.equippedMods[this.weaponIdx];
+    const modKey = `${this.weaponIdx}|${eq ?? "-"}`;
     if (modKey !== this.modsCacheKey) {
       this.modsCacheKey = modKey;
-      this.modsCache = GUN_MODS.filter((m) => gm[m.id]).map((m) => m.short);
+      const m = eq ? GUN_MODS.find((x) => x.id === eq) : undefined;
+      this.modsCache = m ? [m.short] : [];
     }
     this.onHud({
       hp: Math.ceil(this.hp),
@@ -2858,9 +3019,10 @@ export class FoundryGame {
       reserve: this.weaponIdx === 0 ? -1 : this.reserves[this.weaponIdx],
       weapon: this.weaponIdx,
       weaponName: w.name,
-      ammoLine: `${WEAPON_AMMO[this.weaponIdx].designation} · ${Math.round(
-        muzzleVelocity(WEAPON_AMMO[this.weaponIdx], w.barrelIn)
-      ).toLocaleString("en-US")} FPS · ${w.barrelIn}" BBL`,
+      ammoLine:
+        w.pellets > 1
+          ? `${w.dmg}×${w.pellets} DMG · PUMP · ${w.ammoName}`
+          : `${w.dmg} DMG · ${(1 / w.cooldown).toFixed(1)} RPS · ${w.ammoName}`,
       mods: this.modsCache,
       wave: this.wave,
       score: this.score,
@@ -2967,12 +3129,13 @@ export class FoundryGame {
       let moveMul = 1;
 
       if (e.kind === "scrapper") {
-        /* GUNNER: hold the shooting band and strafe, don't chase down */
+        /* GUNNER: plants its feet at the shooting band — advances to reach
+           it, backs off when you push in, but never sidesteps. All of its
+           attention goes into lining up shots. */
         const band = e.range;
         const radial = Math.max(-0.9, Math.min(0.9, (dist - band) * 0.9));
-        const strafe = Math.sin(e.wobble * 1.4 + e.orbitDir) * e.orbitDir;
-        moveX = tangX * strafe * 1.1 + dirX * radial;
-        moveZ = tangZ * strafe * 1.1 + dirZ * radial;
+        moveX = dirX * radial;
+        moveZ = dirZ * radial;
         moveMul = 1;
       } else if (!canAttack && dist < orbitR + 1.4) {
         /* denied the attack token — circle just out of reach, hunting an opening */
