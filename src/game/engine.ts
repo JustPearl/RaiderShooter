@@ -193,8 +193,6 @@ interface WeaponDef {
   swayAmp: number;
   /** how much aiming calms the sway, 0–1 — a braced gun settles, a hog doesn't */
   swaySettle: number;
-  /** seconds to reach full aim-down-sights */
-  adsTime: number;
   /** barrel heat added per shot — sustained fire blooms the cone */
   bloomRate: number;
   /** heat shed per second — how fast the barrel cools */
@@ -233,10 +231,10 @@ const TRACER_SPEED = 340; /* world units/sec the streak head travels */
            full-auto, punishes movement, and takes forever to shoulder. You
            only get its DPS if you plant, brace, and fire in bursts. */
 const WEAPONS: WeaponDef[] = [
-  { name: "P-9 SCRAPLOCK", tag: "P-9", dmg: 26, ammoName: "PISTOL ROUNDS", pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2, bloom: 0.052, moveMul: 1, knock: 1.6, flash: 0.62, tracer: "#ffe8b0", ragdoll: 5.5, swayAmp: 0.5, swaySettle: 1.0, adsTime: 0.16, bloomRate: 0.36, bloomRecover: 1.0, moveSpread: 0.0028, spreadKick: 0.005 },
-  { name: "M870 BREAKER", tag: "BREAKER", dmg: 14, ammoName: "SHOTGUN SHELLS", pellets: 8, spread: 0.055, kick: 0.06, cooldown: 0.82, magSize: 6, reloadTime: 0.5, auto: false, fovPunch: 5, bloom: 0.02, moveMul: 1, knock: 6.5, flash: 1.0, tracer: "#ffc37e", ragdoll: 11, swayAmp: 0.65, swaySettle: 0.8, adsTime: 0.30, bloomRate: 0.10, bloomRecover: 0.9, moveSpread: 0.010, spreadKick: 0.030 },
-  { name: "VK-9 WESPE", tag: "VK-9", dmg: 15, ammoName: "SMG ROUNDS", pellets: 1, spread: 0.013, kick: 0.0075, cooldown: 0.082, magSize: 24, reloadTime: 1.4, auto: true, fovPunch: 0.5, bloom: 0.09, moveMul: 1, knock: 1.0, flash: 0.46, tracer: "#ffe08f", ragdoll: 4.2, swayAmp: 0.8, swaySettle: 0.7, adsTime: 0.22, bloomRate: 0.45, bloomRecover: 0.7, moveSpread: 0.005, spreadKick: 0.010 },
-  { name: "MG-7 HOG", tag: "MG-7", dmg: 22, ammoName: "LMG BELT", pellets: 1, spread: 0.03, kick: 0.02, cooldown: 0.118, magSize: 60, reloadTime: 2.6, auto: true, fovPunch: 1.0, bloom: 0.085, moveMul: 0.85, knock: 3.0, flash: 0.8, tracer: "#ffb45e", ragdoll: 8, swayAmp: 2.2, swaySettle: 0.28, adsTime: 0.55, bloomRate: 0.10, bloomRecover: 0.35, moveSpread: 0.018, spreadKick: 0.020 },
+  { name: "P-9 SCRAPLOCK", tag: "P-9", dmg: 26, ammoName: "PISTOL ROUNDS", pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2, bloom: 0.052, moveMul: 1, knock: 1.6, flash: 0.62, tracer: "#ffe8b0", ragdoll: 5.5, swayAmp: 0.5, swaySettle: 1.0, bloomRate: 0.36, bloomRecover: 1.0, moveSpread: 0.0028, spreadKick: 0.005 },
+  { name: "M870 BREAKER", tag: "BREAKER", dmg: 14, ammoName: "SHOTGUN SHELLS", pellets: 8, spread: 0.055, kick: 0.06, cooldown: 0.82, magSize: 6, reloadTime: 0.5, auto: false, fovPunch: 5, bloom: 0.02, moveMul: 1, knock: 6.5, flash: 1.0, tracer: "#ffc37e", ragdoll: 11, swayAmp: 0.65, swaySettle: 0.8, bloomRate: 0.10, bloomRecover: 0.9, moveSpread: 0.010, spreadKick: 0.030 },
+  { name: "VK-9 WESPE", tag: "VK-9", dmg: 15, ammoName: "SMG ROUNDS", pellets: 1, spread: 0.013, kick: 0.0075, cooldown: 0.082, magSize: 24, reloadTime: 1.4, auto: true, fovPunch: 0.5, bloom: 0.09, moveMul: 1, knock: 1.0, flash: 0.46, tracer: "#ffe08f", ragdoll: 4.2, swayAmp: 0.8, swaySettle: 0.7, bloomRate: 0.45, bloomRecover: 0.7, moveSpread: 0.005, spreadKick: 0.010 },
+  { name: "MG-7 HOG", tag: "MG-7", dmg: 22, ammoName: "LMG BELT", pellets: 1, spread: 0.03, kick: 0.02, cooldown: 0.118, magSize: 60, reloadTime: 2.6, auto: true, fovPunch: 1.0, bloom: 0.085, moveMul: 0.85, knock: 3.0, flash: 0.8, tracer: "#ffb45e", ragdoll: 8, swayAmp: 2.2, swaySettle: 0.28, bloomRate: 0.10, bloomRecover: 0.35, moveSpread: 0.018, spreadKick: 0.020 },
 ];
 
 /* ============================== Skill pool ============================== */
@@ -2135,6 +2133,15 @@ export class FoundryGame {
     return t;
   }
 
+  /* non-linear shoulder speed: at or below SMG weight (~3.2 kg) the gun
+     snaps to the sights at the classic rate; past that the rate falls off
+     a weight curve — a slight lag on the shotgun, a deliberate heave on
+     the LMG. Only genuinely heavy guns pay for their shoulder time. */
+  private adsRate(raise: boolean): number {
+    const over = Math.max(0, this.rigSpec.massKg - 3.2);
+    return (raise ? 12 : 9) / (1 + 0.42 * Math.pow(over, 1.1));
+  }
+
   private currentSpread(): number {
     const w = WEAPONS[this.weaponIdx];
     /* barrel heat — sustained fire blooms the cone; aim suppresses most of it */
@@ -2762,8 +2769,7 @@ export class FoundryGame {
     const wantAim = this.aiming && (this.wState === "idle" || this.wState === "reloading") ? 1 : 0;
     /* time-to-aim is per-weapon: a sidearm snaps up, a hog takes a beat to
        shoulder — so heavy guns can't react-aim, they must be committed */
-    const aimRate = wantAim ? 1 / WEAPONS[this.weaponIdx].adsTime : 9;
-    this.aimAmt += (wantAim - this.aimAmt) * Math.min(1, dt * aimRate);
+    this.aimAmt += (wantAim - this.aimAmt) * Math.min(1, dt * this.adsRate(wantAim > 0));
     const aim = this.aimAmt;
 
     /* ---------- sway spring integration — per-gun: light guns are springy
