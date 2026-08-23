@@ -37,6 +37,37 @@ function OptRow(props: { label: string; value: number; min: number; max: number;
   );
 }
 
+function SegmentedRow<T extends string>(props: {
+  label: string;
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  hint?: string;
+}) {
+  return (
+    <div className="mb-5">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-display text-[12px] tracking-[0.24em] text-[#cdbfa8]">{props.label}</span>
+        {props.hint && <span className="text-[9px] font-semibold tracking-[0.18em] text-[#6e6353]">{props.hint}</span>}
+      </div>
+      <div className="seg-row flex gap-1.5">
+        {props.options.map((o) => (
+          <button
+            key={o.value}
+            onClick={() => {
+              sfx.uiMove();
+              props.onChange(o.value);
+            }}
+            className={`seg-btn ${o.value === props.value ? "seg-on" : ""}`}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef<FoundryGame | null>(null);
@@ -733,8 +764,35 @@ export default function App() {
                 onChange={(v) => setSens(v)}
               />
 
+              <div className="hazard-tape my-6 h-[3px] opacity-40" />
+
+              <SegmentedRow
+                label="RENDER RESOLUTION"
+                hint="INTERNAL BUFFER — UPSAMPLED TO YOUR PANEL"
+                value={resMode}
+                onChange={setResMode}
+                options={[
+                  { value: "480", label: "480i" },
+                  { value: "720", label: "720p" },
+                  { value: "1080", label: "1080p" },
+                  { value: "native", label: "NATIVE" },
+                ]}
+              />
+              <SegmentedRow
+                label="ANTIALIASING"
+                hint="EDGE SMOOTHING FILTER"
+                value={aaMode}
+                onChange={setAaMode}
+                options={[
+                  { value: "off", label: "OFF" },
+                  { value: "fxaa", label: "FXAA" },
+                  { value: "msaa", label: "MSAA ×4" },
+                ]}
+              />
+
               <p className="mt-1 text-[10.5px] leading-relaxed text-[#6e6353]">
-                BRIGHTNESS LIFTS THE 480i SIGNAL BEFORE THE CRT FILTER — RAISE IT IF THE FOUNDRY FLOOR LOOKS TOO DARK ON YOUR PANEL.
+                BRIGHTNESS LIFTS THE SIGNAL BEFORE THE CRT FILTER. 480i KEEPS THE CHUNKY PS2 UPSCALE; HIGHER BUFFERS TRADE THAT
+                LOOK FOR CLARITY. FXAA SOFTENS EDGES, MSAA ×4 IS THE SHARPEST BUT COSTS FRAMERATE.
               </p>
 
               <button
