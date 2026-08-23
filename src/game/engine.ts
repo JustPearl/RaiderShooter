@@ -148,6 +148,7 @@ const VH = 480;
 const ARENA = 31;
 const UP = new THREE.Vector3(0, 1, 0);
 const RIGHT = new THREE.Vector3(1, 0, 0);
+const TRACER_SPEED = 340; /* world units/sec the streak head travels */
 
 const WEAPONS: WeaponDef[] = [
   { name: "P-9 SCRAPLOCK", tag: "P-9", dmg: 34, pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2, bloom: 0.052 },
@@ -324,7 +325,7 @@ export class FoundryGame {
   private tNext = 0;
   private tracerLines!: THREE.LineSegments;
 
-  private flashTex!: THREE.Texture;
+  private flashTex: THREE.Texture[] = [];
   private muzzleFlashes: { group: THREE.Group; matA: THREE.MeshBasicMaterial; matB: THREE.MeshBasicMaterial; life: number; max: number; len: number }[] = [];
   private flashLights: { light: THREE.PointLight; life: number }[] = [];
   private rings: { mesh: THREE.Mesh; life: number; speed: number }[] = [];
@@ -577,7 +578,8 @@ export class FoundryGame {
     const texConcrete = concreteTexture();
     const texBarrelBoom = barrelTexture(true);
     const texBarrelOil = barrelTexture(false);
-    this.flashTex = flashTexture();
+    /* a handful of irregular powder-burn crowns so no two blasts match */
+    for (let i = 0; i < 5; i++) this.flashTex.push(flashTexture());
 
     /* lights */
     const hemi = new THREE.HemisphereLight(new THREE.Color("#5a4a38"), new THREE.Color("#1a120a"), 0.55);
@@ -964,6 +966,11 @@ export class FoundryGame {
     this.tCol = new Float32Array(this.tCount * 6);
     this.tLife = new Float32Array(this.tCount);
     this.tMax = new Float32Array(this.tCount);
+    this.tFrom = new Float32Array(this.tCount * 3);
+    this.tDir = new Float32Array(this.tCount * 3);
+    this.tBase = new Float32Array(this.tCount * 3);
+    this.tLen = new Float32Array(this.tCount);
+    this.tDist = new Float32Array(this.tCount);
     const tg = new THREE.BufferGeometry();
     tg.setAttribute("position", new THREE.BufferAttribute(this.tPos, 3));
     tg.setAttribute("color", new THREE.BufferAttribute(this.tCol, 3));
@@ -976,7 +983,8 @@ export class FoundryGame {
        materials so each burst fades on its own clock */
     const flashGeo = new THREE.PlaneGeometry(1, 0.34);
     for (let i = 0; i < 6; i++) {
-      const matA = new THREE.MeshBasicMaterial({ map: this.flashTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide, opacity: 0 });
+      const crown = this.flashTex[i % this.flashTex.length];
+      const matA = new THREE.MeshBasicMaterial({ map: crown, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide, opacity: 0 });
       const matB = matA.clone();
       const group = new THREE.Group();
       const planeA = new THREE.Mesh(flashGeo, matA);
@@ -1075,23 +1083,45 @@ export class FoundryGame {
     }
   }
 
+  /* A short luminous streak that physically travels from muzzle to impact —
+     the head leads, a dimmer tail trails behind, then it absorbs into the
+     hit point and fades. Reads as a real tracer, kept subtle and brief. */
   private spawnTracer(from: THREE.Vector3, to: THREE.Vector3, color: string) {
     const i = this.tNext;
     this.tNext = (this.tNext + 1) % this.tCount;
+
+    this.tFrom[i * 3] = from.x;
+    this.tFrom[i * 3 + 1] = from.y;
+    this.tFrom[i * 3 + 2] = from.z;
+
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dz = to.z - from.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 0.001;
+    this.tDir[i * 3] = dx / dist;
+    this.tDir[i * 3 + 1] = dy / dist;
+    this.tDir[i * 3 + 2] = dz / dist;
+    this.tDist[i] = dist;
+    this.tLen[i] = 1.6 + Math.random() * 0.9; /* short streak */
+
+    /* start as a collapsed point at the muzzle */
     this.tPos[i * 6] = from.x;
     this.tPos[i * 6 + 1] = from.y;
     this.tPos[i * 6 + 2] = from.z;
-    this.tPos[i * 6 + 3] = to.x;
-    this.tPos[i * 6 + 4] = to.y;
-    this.tPos[i * 6 + 5] = to.z;
-    const c = new THREE.Color(color);
-    for (let k = 0; k < 2; k++) {
-      this.tCol[i * 6 + k * 3] = c.r;
-      this.tCol[i * 6 + k * 3 + 1] = c.g;
-      this.tCol[i * 6 + k * 3 + 2] = c.b;
-    }
-    this.tLife[i] = 0.07;
-    this.tMax[i] = 0.07;
+    this.tPos[i * 6 + 3] = from.x;
+    this.tPos[i * 6 + 4] = from.y;
+    this.tPos[i * 6 + 5] = from.z;
+
+    /* subtle: scale the warm color down so it glows without blowing out */
+    const c = new THREE.Color(color).multiplyScalar(0.5);
+    this.tBase[i * 3] = c.r;
+    this.tBase[i * 3 + 1] = c.g;
+    this.tBase[i * 3 + 2] = c.b;
+
+    const travel = dist / TRACER_SPEED;
+    const fade = 0.045;
+    this.tLife[i] = travel + fade;
+    this.tMax[i] = this.tLife[i];
   }
 
   private spawnMuzzleFlash() {
@@ -2506,16 +2536,50 @@ export class FoundryGame {
     (this.points.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
     (this.points.geometry.attributes.color as THREE.BufferAttribute).needsUpdate = true;
 
-    /* tracers */
+    /* tracers — short streaks that travel muzzle → impact, then fade */
     for (let i = 0; i < this.tCount; i++) {
       if (this.tLife[i] <= 0) continue;
       this.tLife[i] -= dt;
-      const f = Math.max(0, this.tLife[i] / this.tMax[i]);
-      for (let k = 0; k < 6; k++) this.tCol[i * 6 + k] *= Math.pow(f, 0.4);
+
+      const elapsed = this.tMax[i] - this.tLife[i];
+      const dist = this.tDist[i];
+      const len = this.tLen[i];
+      const head = Math.min(TRACER_SPEED * elapsed, dist);
+      const tail = Math.max(0, Math.min(head - len, dist));
+
+      const fx = this.tFrom[i * 3];
+      const fy = this.tFrom[i * 3 + 1];
+      const fz = this.tFrom[i * 3 + 2];
+      const ddx = this.tDir[i * 3];
+      const ddy = this.tDir[i * 3 + 1];
+      const ddz = this.tDir[i * 3 + 2];
+
+      /* tail vertex, then head vertex */
+      this.tPos[i * 6] = fx + ddx * tail;
+      this.tPos[i * 6 + 1] = fy + ddy * tail;
+      this.tPos[i * 6 + 2] = fz + ddz * tail;
+      this.tPos[i * 6 + 3] = fx + ddx * head;
+      this.tPos[i * 6 + 4] = fy + ddy * head;
+      this.tPos[i * 6 + 5] = fz + ddz * head;
+
+      /* full brightness while traveling, fades after the head arrives */
+      const b = Math.min(1, this.tLife[i] / 0.045);
+      const br = this.tBase[i * 3] * b;
+      const bg = this.tBase[i * 3 + 1] * b;
+      const bb = this.tBase[i * 3 + 2] * b;
+      /* tail is dimmer than the head for a comet falloff */
+      this.tCol[i * 6] = br * 0.22;
+      this.tCol[i * 6 + 1] = bg * 0.22;
+      this.tCol[i * 6 + 2] = bb * 0.22;
+      this.tCol[i * 6 + 3] = br;
+      this.tCol[i * 6 + 4] = bg;
+      this.tCol[i * 6 + 5] = bb;
+
       if (this.tLife[i] <= 0) {
         for (let k = 0; k < 6; k++) this.tCol[i * 6 + k] = 0;
       }
     }
+    (this.tracerLines.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
     (this.tracerLines.geometry.attributes.color as THREE.BufferAttribute).needsUpdate = true;
 
     /* muzzle flashes — smoothstep opacity fade, blast stretches as it dies */
