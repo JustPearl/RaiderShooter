@@ -92,14 +92,4 @@ export const GUN_MODS: GunModSpec[] = [
   },
 ];
 
-export const GUN_MOD_INDEX: Record<GunModId, number> = {
-  suppressor: 0,
-  brake: 1,
-  mag: 2,
-  laser: 3,
-  light: 4,
-};
-
-export const MOD_IDS: GunModId[] = ["suppressor", "brake", "mag", "laser", "light"];
-
 export const tierLabel = (tier: number) => (tier >= 2 ? "MK.II" : "MK.I");

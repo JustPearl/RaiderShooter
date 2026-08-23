@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { sfx } from "./audio";
 import { buildRaiderRig, updateRaiderAnim, WINDUP_TIME, type RaiderRig } from "./raider";
 import { RecoilRig, RECOIL_SPECS, RECOIL_INTENSITY } from "./recoil";
-import { GUN_MODS, GUN_MOD_INDEX, MOD_IDS, tierLabel, type GunModId } from "./gunmods";
+import { GUN_MODS, tierLabel, type GunModId } from "./gunmods";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
@@ -529,7 +529,6 @@ export class FoundryGame {
   private tmpV = new THREE.Vector3();
   private tmpV2 = new THREE.Vector3();
   private tmpV3 = new THREE.Vector3();
-  private tmpQ = new THREE.Quaternion();
   private tmpQ2 = new THREE.Quaternion();
 
   constructor(canvas: HTMLCanvasElement, onEvent: (e: GameEvent) => void, onHud: (h: HudData) => void) {
