@@ -11,8 +11,8 @@ import * as THREE from "three";
 export type RaiderKind = "scrapper" | "runner" | "brute";
 
 export const WINDUP_TIME: Record<RaiderKind, number> = {
-  scrapper: 0.42,
-  runner: 0.34,
+  scrapper: 0.6, /* aim telegraph — enough time to break line of sight */
+  runner: 0.38, /* a beat you can backpedal out of */
   brute: 0.62,
 };
 
@@ -38,6 +38,8 @@ export interface RaiderRig {
   eyeMat: THREE.MeshBasicMaterial;
   eyeBase: THREE.Color;
   seed: number;
+  /** world-space muzzle anchor — scrappers only */
+  muzzle: THREE.Object3D | null;
 }
 
 export interface RaiderAnimInput {
@@ -52,6 +54,7 @@ export interface RaiderAnimInput {
   feint: number; // 0..1 fake-swing pulse
   dodgeLean: number; // signed sidestep lean
   windupMul: number; // wave-based telegraph speedup
+  ranged: boolean; // scrapper gunmen aim and fire instead of swinging
 }
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
@@ -83,6 +86,7 @@ export function buildRaiderRig(kind: RaiderKind): RaiderRig {
   const rusty = new THREE.MeshLambertMaterial({ color: "#7a7f86", flatShading: true });
   const eyeMat = new THREE.MeshBasicMaterial({ color: eyeTones[kind] });
   const flashMats = [cloth, skin, dark, steel, rusty];
+  let muzzle: THREE.Object3D | null = null;
 
   const box = (w: number, h: number, d: number, mat: THREE.Material) =>
     new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
@@ -200,13 +204,25 @@ export function buildRaiderRig(kind: RaiderKind): RaiderRig {
     armR.hand.add(edge);
     flashMats.push(edge.material as THREE.MeshLambertMaterial);
   } else {
-    const pipe = cyl(0.033, 0.68, rusty);
-    pipe.position.set(0, -0.34, 0);
-    pipe.rotation.x = 0.35;
-    armR.hand.add(pipe);
-    const valve = box(0.09, 0.07, 0.09, steel);
-    valve.position.set(0, -0.62, 0.1);
-    armR.hand.add(valve);
+    /* scrapper carries a battered scrap pistol — muzzle anchor for tracers */
+    const frame = box(0.07, 0.09, 0.3, dark);
+    frame.position.set(0, -0.02, -0.08);
+    armR.hand.add(frame);
+    const barrelP = cyl(0.024, 0.34, rusty);
+    barrelP.rotation.x = Math.PI / 2;
+    barrelP.position.set(0, 0.01, -0.24);
+    armR.hand.add(barrelP);
+    const gripP = box(0.06, 0.14, 0.07, dark);
+    gripP.position.set(0, -0.11, 0.02);
+    gripP.rotation.x = -0.25;
+    armR.hand.add(gripP);
+    const hammer = box(0.03, 0.05, 0.03, steel);
+    hammer.position.set(0, 0.06, 0.07);
+    armR.hand.add(hammer);
+    const muz = new THREE.Object3D();
+    muz.position.set(0, 0.01, -0.44);
+    armR.hand.add(muz);
+    muzzle = muz;
   }
 
   /* ---- head ---- */
@@ -301,6 +317,7 @@ export function buildRaiderRig(kind: RaiderKind): RaiderRig {
     eyeMat,
     eyeBase: new THREE.Color(eyeTones[kind]),
     seed: Math.random() * Math.PI * 2,
+    muzzle,
   };
 }
 
@@ -409,6 +426,26 @@ export function updateRaiderAnim(rig: RaiderRig, kind: RaiderKind, inp: RaiderAn
       p.shRz = 0.28 * e;
       if (kind === "runner") p.elRx = -1.05 * e;
     }
+    if (inp.ranged) {
+      /* two-handed pistol aim — arms extended, support hand under the frame,
+         live sight sway so the player can read the barrel hunting them */
+      const sway = Math.sin(inp.t * 9 + rig.seed) * 0.045 * e;
+      p.thighL = 0.22 * e;
+      p.thighR = -0.18 * e;
+      p.kneeL = 0.42 * e + 0.12;
+      p.kneeR = 0.3 * e + 0.12;
+      p.ankleL = -0.18 * e;
+      p.ankleR = -0.08 * e;
+      p.spineX = 0.18 * e;
+      p.spineY = 0;
+      p.shRx = (-1.5 + sway) * e;
+      p.elRx = -0.12;
+      p.shLx = (-1.35 - sway) * e;
+      p.elLx = -0.5;
+      p.shRz = 0.08 * e;
+      p.shLz = 0.55 * e; /* left hand crosses in to cradle the grip */
+      p.bobY = -0.03 * e;
+    }
   } else if (inp.state === "strike") {
     const k = clamp(inp.stateT / 0.14, 0, 1);
     const e = k * k;
@@ -447,6 +484,22 @@ export function updateRaiderAnim(rig: RaiderRig, kind: RaiderKind, inp: RaiderAn
       p.shRz = -0.32;
       p.spineY = -0.55 * e;
       p.shLx = 0.4;
+    }
+    if (inp.ranged) {
+      /* firing recoil — elbows snap back, the gun kicks, shoulder absorbs */
+      p.shRx = -1.12;
+      p.elRx = -0.45;
+      p.shLx = -0.98;
+      p.elLx = -0.4;
+      p.shRz = 0.05;
+      p.shLz = 0.5;
+      p.spineX = 0.12 + 0.1 * e;
+      p.spineY = 0;
+      p.thighL = 0.2;
+      p.thighR = -0.16;
+      p.kneeL = 0.4;
+      p.kneeR = 0.28;
+      p.bobY = -0.02 * e;
     }
   } else if (inp.state === "charge") {
     const tele = 0.7;

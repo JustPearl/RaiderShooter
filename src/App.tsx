@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { FoundryGame, type GameEvent, type HudData, type FinalStats, type GamePhase, type SkillCard } from "./game/engine";
+import { FoundryGame, type GameEvent, type HudData, type FinalStats, type GamePhase, type SkillCard, type ResMode, type AAMode } from "./game/engine";
 import { sfx } from "./game/audio";
 
 interface KillEntry {
@@ -37,6 +37,37 @@ function OptRow(props: { label: string; value: number; min: number; max: number;
   );
 }
 
+function SegmentedRow<T extends string>(props: {
+  label: string;
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  hint?: string;
+}) {
+  return (
+    <div className="mb-5">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-display text-[12px] tracking-[0.24em] text-[#cdbfa8]">{props.label}</span>
+        {props.hint && <span className="text-[9px] font-semibold tracking-[0.18em] text-[#6e6353]">{props.hint}</span>}
+      </div>
+      <div className="seg-row flex gap-1.5">
+        {props.options.map((o) => (
+          <button
+            key={o.value}
+            onClick={() => {
+              sfx.uiMove();
+              props.onChange(o.value);
+            }}
+            className={`seg-btn ${o.value === props.value ? "seg-on" : ""}`}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef<FoundryGame | null>(null);
@@ -58,6 +89,8 @@ export default function App() {
   const hpWrap = useRef<HTMLDivElement>(null);
   const ammoText = useRef<HTMLSpanElement>(null);
   const reserveText = useRef<HTMLSpanElement>(null);
+  const ammoLineText = useRef<HTMLDivElement>(null);
+  const modsText = useRef<HTMLDivElement>(null);
   const weaponName = useRef<HTMLDivElement>(null);
   const waveText = useRef<HTMLSpanElement>(null);
   const scoreText = useRef<HTMLSpanElement>(null);
@@ -81,6 +114,23 @@ export default function App() {
   const [brightness, setBrightness] = useState(() => loadOpt("fo-brightness", 1, 0.5, 1.6));
   const [volume, setVolume] = useState(() => loadOpt("fo-volume", 1, 0, 1));
   const [sens, setSens] = useState(() => loadOpt("fo-sens", 1, 0.5, 2));
+  /* graphics — persisted under the same keys the engine reads at boot */
+  const [resMode, setResMode] = useState<ResMode>(() => {
+    try {
+      const r = localStorage.getItem("fo_res");
+      return r === "720" || r === "1080" || r === "native" ? r : "480";
+    } catch {
+      return "480";
+    }
+  });
+  const [aaMode, setAaMode] = useState<AAMode>(() => {
+    try {
+      const a = localStorage.getItem("fo_aa");
+      return a === "fxaa" || a === "msaa" ? a : "off";
+    } catch {
+      return "off";
+    }
+  });
   const [optOpen, setOptOpen] = useState(false);
 
   /* lift the 480i signal before the CRT filter; persisted per panel */
@@ -100,6 +150,14 @@ export default function App() {
     gameRef.current?.setSensitivity(sens);
     localStorage.setItem("fo-sens", String(sens));
   }, [sens]);
+
+  useEffect(() => {
+    gameRef.current?.setResolution(resMode);
+  }, [resMode]);
+
+  useEffect(() => {
+    gameRef.current?.setAA(aaMode);
+  }, [aaMode]);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -171,6 +229,12 @@ export default function App() {
         ammoText.current.style.color = h.ammo === 0 ? "#ff2e1f" : h.ammo <= 2 ? "#ffb42e" : "#ffe8c8";
       }
       if (reserveText.current) reserveText.current.textContent = h.reserve < 0 ? "∞" : String(h.reserve);
+      if (ammoLineText.current) ammoLineText.current.textContent = h.ammoLine;
+      if (modsText.current) {
+        const mt = h.mods.length ? h.mods.join(" · ") : "";
+        if (modsText.current.textContent !== mt) modsText.current.textContent = mt;
+        modsText.current.style.opacity = mt ? "1" : "0";
+      }
       if (weaponName.current) weaponName.current.textContent = h.weaponName;
       if (waveText.current) waveText.current.textContent = String(Math.max(1, h.wave)).padStart(2, "0");
       if (scoreText.current) scoreText.current.textContent = String(h.score).padStart(6, "0");
@@ -409,6 +473,16 @@ export default function App() {
               <div ref={weaponName} className="text-[11px] font-semibold tracking-[0.3em] text-[#b8a88f]">
                 P-9 SCRAPLOCK
               </div>
+              <div ref={ammoLineText} className="mt-0.5 text-[9.5px] font-semibold tracking-[0.14em] text-[#8a7f6c]">
+                .45 ACP · 831 FPS · 5.1" BBL
+              </div>
+              <div
+                ref={modsText}
+                className="mt-1 text-[9px] font-bold tracking-[0.28em] text-[#ffb42e]"
+                style={{ opacity: 0, transition: "opacity 0.2s ease", textShadow: "0 0 10px rgba(255,180,46,0.4)" }}
+              >
+                &nbsp;
+              </div>
               <div className="flex items-baseline justify-end gap-2">
                 <span ref={ammoText} className="font-display text-5xl leading-none text-[#ffe8c8] hud-shadow">
                   12
@@ -540,7 +614,7 @@ export default function App() {
                       <rect x="8" y="9" width="6" height="8" fill="#8a7f6c" />
                     </svg>
                     <p className="text-[#cdbfa8]">
-                      <span className="font-bold text-[#ffe8c8]">P-9 SCRAPLOCK</span> — rapid sidearm. Bottomless reserve. Headshots pay double.
+                      <span className="font-bold text-[#ffe8c8]">P-9 SCRAPLOCK</span> — .45 ACP sidearm. Slow, heavy rounds out of a 5.1" barrel. Bottomless reserve. Headshots pay double.
                     </p>
                   </div>
                   <div className="flex items-start gap-3">
@@ -690,8 +764,35 @@ export default function App() {
                 onChange={(v) => setSens(v)}
               />
 
+              <div className="hazard-tape my-6 h-[3px] opacity-40" />
+
+              <SegmentedRow
+                label="RENDER RESOLUTION"
+                hint="INTERNAL BUFFER — UPSAMPLED TO YOUR PANEL"
+                value={resMode}
+                onChange={setResMode}
+                options={[
+                  { value: "480", label: "480i" },
+                  { value: "720", label: "720p" },
+                  { value: "1080", label: "1080p" },
+                  { value: "native", label: "NATIVE" },
+                ]}
+              />
+              <SegmentedRow
+                label="ANTIALIASING"
+                hint="EDGE SMOOTHING FILTER"
+                value={aaMode}
+                onChange={setAaMode}
+                options={[
+                  { value: "off", label: "OFF" },
+                  { value: "fxaa", label: "FXAA" },
+                  { value: "msaa", label: "MSAA ×4" },
+                ]}
+              />
+
               <p className="mt-1 text-[10.5px] leading-relaxed text-[#6e6353]">
-                BRIGHTNESS LIFTS THE 480i SIGNAL BEFORE THE CRT FILTER — RAISE IT IF THE FOUNDRY FLOOR LOOKS TOO DARK ON YOUR PANEL.
+                BRIGHTNESS LIFTS THE SIGNAL BEFORE THE CRT FILTER. 480i KEEPS THE CHUNKY PS2 UPSCALE; HIGHER BUFFERS TRADE THAT
+                LOOK FOR CLARITY. FXAA SOFTENS EDGES, MSAA ×4 IS THE SHARPEST BUT COSTS FRAMERATE.
               </p>
 
               <button
@@ -739,7 +840,23 @@ export default function App() {
                       <div className="font-display text-[22px] leading-tight text-[#ffe8c8] group-hover:text-white" style={{ textShadow: `0 0 18px ${rc}55` }}>
                         {c.name}
                       </div>
-                      <p className="mt-2.5 min-h-[54px] text-[12.5px] leading-snug text-[#cdbfa8]">{c.desc}</p>
+                      <p className="mt-2.5 text-[12.5px] leading-snug text-[#cdbfa8]">{c.desc}</p>
+                      {(c.pros || c.cons) && (
+                        <div className="mt-3 space-y-1 border-l-2 border-[rgba(255,107,26,0.3)] pl-2.5">
+                          {(c.pros ?? []).map((p, pi) => (
+                            <div key={`p${pi}`} className="flex items-start gap-1.5 text-[11px] font-semibold leading-snug text-[#7dff5e]">
+                              <span className="mt-[1px]">▲</span>
+                              <span>{p}</span>
+                            </div>
+                          ))}
+                          {(c.cons ?? []).map((co, ci) => (
+                            <div key={`c${ci}`} className="flex items-start gap-1.5 text-[11px] font-semibold leading-snug text-[#ff5a4e]">
+                              <span className="mt-[1px]">▼</span>
+                              <span>{co}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <div className="mt-4 flex items-center justify-between border-t border-[rgba(184,168,143,0.18)] pt-3.5">
                         <div className="flex gap-1.5">
                           {Array.from({ length: c.maxLevel }).map((_, p) => (
