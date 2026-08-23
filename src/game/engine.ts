@@ -288,15 +288,16 @@ const SKILLS: SkillDef[] = [
 ];
 
 const ENEMY_DEFS: Record<EnemyKind, { hp: number; speed: number; dmg: number; range: number; score: number; scale: number }> = {
-  /* gunmen: hold mid range and fire in staggered bursts —
-     their bullets hurt a little less and fly a little slower than fear suggests */
-  scrapper: { hp: 90, speed: 3.2, dmg: 6, range: 8, score: 100, scale: 1 },
-  /* sprinters: quick, but a determined walk (5.8) nearly matches them and
-     a sprint (8.4) leaves them behind */
-  runner: { hp: 51, speed: 5.6, dmg: 5, range: 1.55, score: 150, scale: 0.88 },
-  /* heavies: a wall of hitpoints and a wide cleave — every gun hurts them
-     equally, the question is how much ammo you can afford to spend */
-  brute: { hp: 405, speed: 2.2, dmg: 22, range: 2.7, score: 400, scale: 1.45 },
+  /* GUNLINE: disciplined mid-range fire. Holds a 7–10 m lane, fires bursts
+     with lead, and backpedals under pressure while still shooting. */
+  scrapper: { hp: 90, speed: 3.2, dmg: 7, range: 9, score: 100, scale: 1 },
+  /* LANCER: no longer a swarm of gnats — a deliberate leaper. Slower than a
+     sprint, tougher than before, and every landing hurts. Kite it or eat 9. */
+  runner: { hp: 68, speed: 5.0, dmg: 9, range: 5.2, score: 150, scale: 0.88 },
+  /* SIEGE: the anchor. Too armored to flinch off small arms, closes with
+     steered bull rushes, and every rush ends in a ground slam — miss the
+     trample and you still eat the shockwave. */
+  brute: { hp: 470, speed: 2.7, dmg: 26, range: 3.0, score: 400, scale: 1.45 },
 };
 
 const FLASH_WHITE = new THREE.Color("#ffffff");
@@ -1920,9 +1921,12 @@ export class FoundryGame {
     if (e.state === "charge" && !head) dmg *= 0.5; /* charging brutes shrug off body shots */
     e.hp -= dmg;
     e.flash = 1;
-    e.hitstun = 0.13;
-    e.kvx += dir.x * knock;
-    e.kvz += dir.z * knock;
+    /* heavies wade through small-arms fire — only a real hit checks them */
+    const heavy = e.kind === "brute";
+    e.hitstun = heavy && knock < 5 ? 0.04 : 0.13;
+    const kb = heavy && knock < 5 ? 0.3 : 1;
+    e.kvx += dir.x * knock * kb;
+    e.kvz += dir.z * knock * kb;
     /* only a genuinely heavy blow (shotgun blast, barrel blast) breaks a
        wound-up attack — light full-auto fire must not stun-lock */
     if (e.state === "windup" && knock >= 4) {
@@ -2380,8 +2384,11 @@ export class FoundryGame {
        balanced and the late game leans on guns and brutes. */
     const count = Math.min(3 + this.wave * 2 + Math.floor(this.wave * this.wave * 0.14), 24);
     const brutes = this.wave >= 3 ? Math.min(1 + Math.floor((this.wave - 3) / 2), 4) : 0;
-    const scrappers = this.wave >= 2 ? Math.max(1, Math.min(count - brutes - 2, 1 + Math.floor((this.wave - 1) * 0.8))) : 0;
-    const runners = Math.max(2, count - brutes - scrappers);
+    const base = count - brutes;
+    /* leapers are the vanguard but never the whole wave; the gunline becomes
+       the backbone from wave 4 onward, heavies anchor it from wave 3 */
+    const runners = this.wave >= 2 ? Math.max(2, Math.round(base * 0.45)) : base;
+    const scrappers = this.wave >= 2 ? Math.max(1, base - runners) : 0;
 
     /* ---------- split the squad into coordinated pulses ----------
        vanguard (skirmishers) hits first and fast, the gunline sets up a beat
@@ -3253,17 +3260,25 @@ export class FoundryGame {
         while (dAng > Math.PI) dAng -= Math.PI * 2;
         while (dAng < -Math.PI) dAng += Math.PI * 2;
         e.laneAngle += dAng * Math.min(1, dt * 1.3);
-        /* stand just inside the firing band; fall well back (and hold fire)
-           once melee is engaged so they have room to work, and hang a touch
-           deeper when a heavy is anchoring the push */
-        const desired =
-          e.range * 0.85 + e.caution * 1.4 + (this.squadMeleeEngaged ? 3.0 : 0) + (this.squadBrutesActive ? 0.8 : 0);
+        /* hold a lane inside the firing band — it may shift with the fight,
+           but never drift so far out that the gun can't reach */
+        const desired = Math.min(
+          e.range + 0.6,
+          e.range * 0.8 + e.caution * 1.2 + (this.squadMeleeEngaged ? 2.2 : 0) + (this.squadBrutesActive ? 0.6 : 0)
+        );
         const tx = this.pos.x + Math.sin(e.laneAngle) * desired;
         const tz = this.pos.z + Math.cos(e.laneAngle) * desired;
         moveX = tx - e.group.position.x;
         moveZ = tz - e.group.position.z;
         const md = Math.hypot(moveX, moveZ);
         moveMul = md < 0.7 ? 0 : Math.min(1, md / 2.5);
+        /* pressed at close range — give ground fast, gun still up.
+           This is what makes them a gunner instead of a brawler. */
+        if (dist < 4.2) {
+          moveX = -dirX;
+          moveZ = -dirZ;
+          moveMul = 1.35;
+        }
       } else if (!canAttack && dist < orbitR + 1.4) {
         /* denied the attack token — pace just out of reach on your own side,
            hunting an opening instead of piling in */
@@ -3272,19 +3287,19 @@ export class FoundryGame {
         moveZ = tangZ * 0.95 + dirZ * radial;
         moveMul = 0.85 * (hesitating ? 0.5 : 1);
       } else if (e.kind === "runner") {
-        /* SKIRMISHER: sweeps in from its assigned flank, straightening only
-           for the final rush — so the pack arrives from several angles */
-        const sweep = Math.max(0, Math.min(1, (dist - e.range) / (e.range * 1.4)));
-        const off = e.flank * 2.8 * sweep;
+        /* LANCER: stalks in from its assigned flank, wide at range, then
+           squares up once inside leap distance and crouches for the spring */
+        const sweep = Math.max(0, Math.min(1, (dist - 6.5) / 6));
+        const off = e.flank * 3.4 * sweep;
         const tx = this.pos.x - dirZ * off;
         const tz = this.pos.z + dirX * off;
         const ax = tx - e.group.position.x;
         const az = tz - e.group.position.z;
         const ad = Math.hypot(ax, az) || 1;
-        const wob = Math.sin(e.wobble * 2.2) * 0.18;
+        const wob = Math.sin(e.wobble * 2.2) * 0.16;
         moveX = ax / ad + -dirZ * wob;
         moveZ = az / ad + dirX * wob;
-        moveMul = (hesitating ? 0.3 : 1) * 1.1;
+        moveMul = (hesitating ? 0.3 : 1) * (dist < e.range ? 0.25 : 1);
       } else {
         /* HEAVY: the slow, steady anchor — a slight lane offset keeps
            multiple brutes from stacking on the same point */
@@ -3342,9 +3357,13 @@ export class FoundryGame {
         e.group.position.z -= dirZ * 0.4;
       }
 
-      /* gunners fire from their lane (a slightly generous band) but won't
-         pull the trigger at point-blank — they back off instead */
-      const inReach = e.kind === "scrapper" ? dist < e.range + 1.2 && dist > 2.3 : dist < e.range;
+      /* attack triggers, per archetype */
+      const inReach =
+        e.kind === "scrapper"
+          ? dist < e.range + 0.8 && dist > 2.0 /* gunline fires from its whole lane */
+          : e.kind === "runner"
+            ? dist < e.range /* leapers spring from ~5 m */
+            : dist < e.range;
       if (inReach && canAttack) {
         e.state = "windup";
         e.stateT = 0;
@@ -3354,12 +3373,13 @@ export class FoundryGame {
           const gunsInVolley = this.enemies.filter((o) => o !== e && o.kind === "scrapper" && o.state !== "dead" && (o.state === "windup" || o.state === "strike")).length;
           e.attackCd = 2.3 + Math.min(gunsInVolley, 3) * 0.5 + Math.random() * 0.9;
         }
-      } else if (e.kind === "brute" && this.wave >= 2 && e.attackCd <= 0 && tokens < this.maxAttackers() && dist > 5 && dist < 13.5) {
-        /* bull rush from mid range */
+      } else if (e.kind === "brute" && e.attackCd <= 0 && tokens < this.maxAttackers() && dist > 3.5 && dist < 16) {
+        /* bull rush is the brute's primary way of crossing the floor —
+           it doesn't slowly shuffle, it launches */
         e.state = "charge";
         e.stateT = 0;
         e.chargeLocked = false;
-        e.attackCd = 1.2;
+        e.attackCd = 2.0;
         sfx.spawnRoar();
         this.trauma = Math.min(1.4, this.trauma + 0.12);
       }
@@ -3371,6 +3391,11 @@ export class FoundryGame {
         if (e.kind === "scrapper") {
           e.burst = 3;
           e.burstT = 0;
+        } else if (e.kind === "runner") {
+          /* the spring re-aims at launch — it tracked you through the crouch */
+          e.chargeDirX = dirX;
+          e.chargeDirZ = dirZ;
+          sfx.spawnRoar();
         } else {
           sfx.swing();
           /* brutes get their big red arc on the impact frame instead */
@@ -3399,45 +3424,56 @@ export class FoundryGame {
         if (e.burst <= 0 && e.burstT <= 0) {
           e.state = "chase";
         }
-      } else {
-        /* pounce — runners close the gap mid-swing so backpedalling isn't free */
-        const lunge = e.kind === "runner" ? 9.5 : 0;
-        if (lunge > 0 && e.stateT < 0.16) {
-          e.group.position.x += Math.sin(e.group.rotation.y) * lunge * dt;
-          e.group.position.z += Math.cos(e.group.rotation.y) * lunge * dt;
-          this.collideCircle(e.group.position, 0.45 * ENEMY_DEFS[e.kind].scale);
-        }
-        if (e.stateT >= 0.09 && e.stateT - dt < 0.09) {
-          /* impact frame */
-          if (e.kind === "brute") {
-            /* wide cleave — the maul's arc and its shockwave catch everything close */
-            this.spawnSwipe(e.group.position, e.group.rotation.y, ENEMY_DEFS.brute.scale, true);
-            this.trauma = Math.min(1.4, this.trauma + 0.32);
-            this.tmpV3.copy(e.group.position);
-            this.tmpV3.y += 0.12;
-            this.spawnParticles(this.tmpV3, 12, ["#4a3c2a", "#2a231b", "#8a7f70", "#ffb42e"], 3.0, 0.42, 7);
-            sfx.barrelClang();
-            if (dist < 3.4) {
-              this.damagePlayer(e.dmg, e.group.position);
-              /* the slam shoves you off your footing */
-              const sh = 1.0;
-              this.pos.x = Math.max(-30, Math.min(30, this.pos.x + (dx / dist) * sh));
-              this.pos.z = Math.max(-30, Math.min(30, this.pos.z + (dz / dist) * sh));
-            }
-          } else if (dist < e.range * 1.25) {
+      } else if (e.kind === "runner") {
+        /* the spring — an arcing leap along the locked direction. It covers
+           ~4 m in a fifth of a second; anything underneath lands hurt. */
+        const leapDur = 0.2;
+        if (e.stateT < leapDur) {
+          const ls = 20;
+          e.group.position.x += e.chargeDirX * ls * dt;
+          e.group.position.z += e.chargeDirZ * ls * dt;
+          e.group.position.y = Math.sin(Math.min(1, e.stateT / leapDur) * Math.PI) * 1.0;
+          this.collideCircle(e.group.position, 0.4);
+          if (Math.hypot(this.pos.x - e.group.position.x, this.pos.z - e.group.position.z) < 1.3) {
             this.damagePlayer(e.dmg, e.group.position);
+            e.stateT = leapDur; /* connected — land early */
+          }
+        } else {
+          e.group.position.y = 0;
+          if (e.stateT >= leapDur + 0.28) {
+            /* landing recovery — your window to answer */
+            e.attackCd = 1.5 * (e.enraged ? 0.72 : 1);
+            e.state = "chase";
+          }
+        }
+      } else {
+        /* brute cleave impact frame */
+        if (e.stateT >= 0.09 && e.stateT - dt < 0.09) {
+          /* wide cleave — the maul's arc and its shockwave catch everything close */
+          this.spawnSwipe(e.group.position, e.group.rotation.y, ENEMY_DEFS.brute.scale, true);
+          this.trauma = Math.min(1.4, this.trauma + 0.32);
+          this.tmpV3.copy(e.group.position);
+          this.tmpV3.y += 0.12;
+          this.spawnParticles(this.tmpV3, 12, ["#4a3c2a", "#2a231b", "#8a7f70", "#ffb42e"], 3.0, 0.42, 7);
+          sfx.barrelClang();
+          if (dist < 3.6) {
+            this.damagePlayer(e.dmg, e.group.position);
+            /* the slam shoves you off your footing */
+            const sh = 1.15;
+            this.pos.x = Math.max(-30, Math.min(30, this.pos.x + (dx / dist) * sh));
+            this.pos.z = Math.max(-30, Math.min(30, this.pos.z + (dz / dist) * sh));
           }
         }
         if (e.stateT >= 0.4) {
-          e.attackCd = (e.kind === "brute" ? 1.3 : 0.8) * (e.enraged ? 0.72 : 1);
+          e.attackCd = 1.3 * (e.enraged ? 0.72 : 1);
           e.state = "chase";
         }
       }
     } else if (e.state === "charge") {
       e.stateT += dt;
-      const tele = 0.7;
+      const tele = 0.55;
       if (e.stateT < tele) {
-        /* stomping telegraph — keeps tracking the player, begging to be sidestepped */
+        /* stomping telegraph — paws the floor and tracks you, daring a dodge */
         e.walkT += dt * 6;
         if (Math.floor(e.stateT / 0.12) !== Math.floor((e.stateT - dt) / 0.12)) {
           this.tmpV3.copy(e.group.position);
@@ -3448,7 +3484,7 @@ export class FoundryGame {
         let dr = targetRot - e.group.rotation.y;
         while (dr > Math.PI) dr -= Math.PI * 2;
         while (dr < -Math.PI) dr += Math.PI * 2;
-        e.group.rotation.y += dr * Math.min(1, dt * 7);
+        e.group.rotation.y += dr * Math.min(1, dt * 8);
       } else {
         if (!e.chargeLocked) {
           e.chargeLocked = true;
@@ -3456,7 +3492,22 @@ export class FoundryGame {
           e.chargeDirZ = dirZ;
           sfx.spawnRoar();
         }
-        const rush = 8.6;
+        /* for the first beat of the rush the brute can still steer — a lazy
+           sidestep gets clipped, only a committed dodge is safe */
+        const steer = 0.4;
+        if (e.stateT - tele < steer) {
+          const want = Math.atan2(dx, dz);
+          const cur = Math.atan2(e.chargeDirX, e.chargeDirZ);
+          let dd = want - cur;
+          while (dd > Math.PI) dd -= Math.PI * 2;
+          while (dd < -Math.PI) dd += Math.PI * 2;
+          dd = Math.max(-2.3 * dt, Math.min(2.3 * dt, dd));
+          const ang = cur + dd;
+          e.chargeDirX = Math.sin(ang);
+          e.chargeDirZ = Math.cos(ang);
+          e.group.rotation.y = ang;
+        }
+        const rush = 10.2;
         const px = e.group.position.x;
         const pz = e.group.position.z;
         e.group.position.x += e.chargeDirX * rush * dt;
@@ -3465,27 +3516,17 @@ export class FoundryGame {
         e.walkT += dt * 15;
         const adv = Math.hypot(e.group.position.x - px, e.group.position.z - pz);
         const dNow = Math.hypot(this.pos.x - e.group.position.x, this.pos.z - e.group.position.z);
-        if (dNow < 1.55) {
+        if (dNow < 1.6) {
           /* trampled */
           this.damagePlayer(e.dmg * 1.75, e.group.position);
           this.trauma = Math.min(1.4, this.trauma + 0.5);
           sfx.barrelClang();
           e.state = "stagger";
           e.stateT = 0;
-        } else if (adv < rush * dt * 0.4) {
-          /* slammed into architecture — briefly defenseless */
-          e.state = "stagger";
-          e.stateT = 0;
-          e.attackCd = 1.1;
-          sfx.barrelClang();
-          this.trauma = Math.min(1.4, this.trauma + 0.14);
-          this.tmpV3.copy(e.group.position);
-          this.tmpV3.y += 0.2;
-          this.spawnParticles(this.tmpV3, 8, ["#4a3c2a", "#2a231b"], 2.2, 0.4, 6);
-        } else if (e.stateT - tele > 1.15) {
-          e.state = "stagger";
-          e.stateT = 0;
-          e.attackCd = 1.1;
+        } else if (adv < rush * dt * 0.4 || e.stateT - tele > 1.05) {
+          /* the rush always ends in a ground slam — dangerous even when the
+             trample whiffs. The recovery afterwards is your opening. */
+          this.bruteSlam(e);
         }
       }
     } else if (e.state === "stagger") {
@@ -3570,6 +3611,29 @@ export class FoundryGame {
   }
 
   /* drive the skeletal rig from the enemy's current state */
+  /* the shockwave a brute lands at the end of a bull rush — missing the
+     trample doesn't make you safe if you're standing near the landing */
+  private bruteSlam(e: Enemy) {
+    e.state = "chase";
+    e.stateT = 0;
+    e.attackCd = 2.0;
+    this.spawnSwipe(e.group.position, e.group.rotation.y, ENEMY_DEFS.brute.scale, true);
+    this.trauma = Math.min(1.4, this.trauma + 0.34);
+    sfx.barrelClang();
+    this.tmpV3.copy(e.group.position);
+    this.tmpV3.y += 0.15;
+    this.spawnParticles(this.tmpV3, 14, ["#4a3c2a", "#2a231b", "#8a7f70", "#ffb42e"], 3.2, 0.45, 7);
+    const dxs = this.pos.x - e.group.position.x;
+    const dzs = this.pos.z - e.group.position.z;
+    const ds = Math.hypot(dxs, dzs) || 1;
+    if (ds < 3.2) {
+      this.damagePlayer(20, e.group.position);
+      const sh = 1.2;
+      this.pos.x = Math.max(-30, Math.min(30, this.pos.x + (dxs / ds) * sh));
+      this.pos.z = Math.max(-30, Math.min(30, this.pos.z + (dzs / ds) * sh));
+    }
+  }
+
   private animRaider(e: Enemy, dt: number, t: number) {
     const dx = this.pos.x - e.group.position.x;
     const dz = this.pos.z - e.group.position.z;
@@ -3651,9 +3715,9 @@ export class FoundryGame {
     const oy = this.tmpV.y;
     const oz = this.tmpV.z;
     /* lead the target a touch, then smear with wave-scaled inaccuracy */
-    const tx = this.pos.x + this.vel.x * 0.12;
+    const tx = this.pos.x + this.vel.x * 0.15;
     const ty = 1.35 + this.pos.y;
-    const tz = this.pos.z + this.vel.z * 0.12;
+    const tz = this.pos.z + this.vel.z * 0.15;
     let dx = tx - ox;
     let dy = ty - oy;
     let dz = tz - oz;
@@ -3662,7 +3726,7 @@ export class FoundryGame {
     dy /= len;
     dz /= len;
     /* sloppy iron sights — wide cone that only tightens slowly with waves */
-    const sm = 0.24 * spreadMul;
+    const sm = 0.21 * spreadMul;
     dx += (Math.random() - 0.5) * sm;
     dy += (Math.random() - 0.5) * sm * 0.6;
     dz += (Math.random() - 0.5) * sm;
@@ -3673,7 +3737,7 @@ export class FoundryGame {
     this.bDir[i * 3] = dx / dl;
     this.bDir[i * 3 + 1] = dy / dl;
     this.bDir[i * 3 + 2] = dz / dl;
-    this.bSpd[i] = 20;
+    this.bSpd[i] = 22;
     b.life = 1.4;
     b.mesh.visible = true;
     b.mat.opacity = 0.9;

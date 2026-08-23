@@ -12,8 +12,8 @@ export type RaiderKind = "scrapper" | "runner" | "brute";
 
 export const WINDUP_TIME: Record<RaiderKind, number> = {
   scrapper: 0.6, /* aim telegraph — enough time to break line of sight */
-  runner: 0.38, /* a beat you can backpedal out of */
-  brute: 0.62,
+  runner: 0.34, /* the leap crouch — quick, but readable */
+  brute: 0.55, /* the cleave wind — heavy and committal */
 };
 
 export interface RaiderRig {
@@ -446,6 +446,25 @@ export function updateRaiderAnim(rig: RaiderRig, kind: RaiderKind, inp: RaiderAn
       p.shLz = 0.55 * e; /* left hand crosses in to cradle the grip */
       p.bobY = -0.03 * e;
     }
+    if (kind === "runner" && !inp.ranged) {
+      /* coiling for the spring — sunk low, knees drawn, arms cocked back
+       like a sprinter in the blocks */
+      p.thighL = 1.0 * e;
+      p.thighR = 0.7 * e;
+      p.kneeL = 1.7 * e + 0.12;
+      p.kneeR = 1.45 * e + 0.12;
+      p.ankleL = -0.55 * e;
+      p.ankleR = -0.45 * e;
+      p.spineX = 0.4 * e;
+      p.spineY = 0;
+      p.shLx = -0.55 * e;
+      p.shRx = -0.7 * e;
+      p.elLx = -0.6;
+      p.elRx = -0.7;
+      p.shLz = -0.1;
+      p.shRz = 0.1;
+      p.bobY = -0.1 * e;
+    }
   } else if (inp.state === "strike") {
     const k = clamp(inp.stateT / 0.14, 0, 1);
     const e = k * k;
@@ -471,13 +490,21 @@ export function updateRaiderAnim(rig: RaiderRig, kind: RaiderKind, inp: RaiderAn
       p.thighR = 0.36;
       p.bobY = -0.09 * e;
     } else if (kind === "runner") {
-      p.shRx = 1.28;
-      p.elRx = -0.15;
-      p.spineX = 0.44 * e;
-      p.thighL = 0.9;
-      p.thighR = -0.62;
-      p.kneeL = 0.95;
-      p.shLx = -0.5;
+      /* folded mid-leap — knees tucked, arms reaching for the landing */
+      p.thighL = 1.15;
+      p.thighR = 0.9;
+      p.kneeL = 1.95;
+      p.kneeR = 1.7;
+      p.ankleL = -0.75;
+      p.ankleR = -0.6;
+      p.shLx = 0.9;
+      p.shRx = 0.7;
+      p.elLx = 0.4;
+      p.elRx = 0.35;
+      p.shLz = -0.25;
+      p.shRz = 0.2;
+      p.spineX = 0.34 * e;
+      p.bobY = -0.02;
     } else {
       p.shRx = 1.06;
       p.elRx = 0.18;
