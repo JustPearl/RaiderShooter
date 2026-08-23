@@ -2107,7 +2107,7 @@ export class FoundryGame {
     this.mouseDY = 0;
 
     /* apply view immediately so firing rays match the on-screen aim */
-    this.camera.rotation.set(this.pitch + this.rig.pitch + this.aimPitch, this.yaw + this.rig.yaw + this.aimYaw, 0);
+    this.camera.rotation.set(this.pitch + this.rig.camPitch + this.aimPitch, this.yaw + this.rig.camYaw + this.aimYaw, 0);
     this.camera.position.set(this.pos.x, 1.66 + this.pos.y + this.bobY, this.pos.z);
 
     /* head bob + footsteps */
@@ -2134,8 +2134,8 @@ export class FoundryGame {
     this.rig.update(dt, this.rigSpec, this.aimAmt);
     /* a braced gun fights the kick: the sight picture tracks the target
        tighter by partially cancelling the snap while aimed */
-    this.aimYaw = -this.rig.yaw * this.aimAmt * 0.8;
-    this.aimPitch = -this.rig.pitch * this.aimAmt * 0.35;
+    this.aimYaw = -this.rig.camYaw * this.aimAmt * 0.8;
+    this.aimPitch = -this.rig.camPitch * this.aimAmt * 0.35;
     this.fovKick *= Math.exp(-8 * dt);
     if (this.gunLight) this.gunLight.intensity = Math.max(1.1, this.gunLight.intensity * Math.exp(-16 * dt));
     this.comboT -= dt;
@@ -2227,13 +2227,19 @@ export class FoundryGame {
     const baseZ = this.vmBase.z * (1 - aim) + -0.34 * aim;
     const idleAmp = 1 - aim * 0.85;
     /* recoil rig drives the gun body: shove into the shoulder, muzzle lever,
-       horizontal snap and barrel torque — the horizon itself never rolls */
+       horizontal snap and barrel torque — the horizon itself never rolls.
+       The gun shows the FULL motion (crack + heave); only the camera is
+       smoothed by its follower, so the gun visibly leads the eye. */
     const rigPush = Math.min(this.rig.push * 1.5, 0.26);
-    let vy = baseY + this.bobY * 0.6 * idleAmp + Math.sin(this.bobT) * bobAmp * 0.6 * idleAmp - swY * 0.4 - this.rig.drop;
-    let vx = baseX + Math.sin(this.bobT * 0.5) * bobAmp * 0.4 * idleAmp + swX * 0.45;
+    const gunPitch = this.rig.pitch + this.rig.pitchF;
+    /* human hold-sway — a held gun never sits perfectly still */
+    const hsx = this.rig.holdX;
+    const hsy = this.rig.holdY;
+    let vy = baseY + this.bobY * 0.6 * idleAmp + Math.sin(this.bobT) * bobAmp * 0.6 * idleAmp - swY * 0.4 - this.rig.drop + hsy * 0.009;
+    let vx = baseX + Math.sin(this.bobT * 0.5) * bobAmp * 0.4 * idleAmp + swX * 0.45 + hsx * 0.012;
     let vz = baseZ + rigPush + swY * 0.12;
-    let vrx = this.rig.pitch * 2.2 + swY * 1.1;
-    let vry = -swX * 0.9 + this.rig.yaw * 6;
+    let vrx = gunPitch * 2.2 + swY * 1.1 + hsy * 0.02;
+    let vry = -swX * 0.9 + this.rig.yaw * 6 + hsx * 0.022;
     let vrz = Math.sin(this.bobT) * bobAmp * 0.3 * idleAmp + swX * 0.5 + this.rig.roll * 2.5;
 
     if (this.wState === "lowering") vy -= 0.35 * (1 - this.wT / 0.16);
@@ -2396,7 +2402,7 @@ export class FoundryGame {
     this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 9);
     this.camera.updateProjectionMatrix();
     this.camera.position.set(this.pos.x + shX, 1.66 + this.pos.y + this.bobY + shY, this.pos.z);
-    this.camera.rotation.set(this.pitch + this.rig.pitch + this.aimPitch, this.yaw + this.rig.yaw + this.aimYaw, shR);
+    this.camera.rotation.set(this.pitch + this.rig.camPitch + this.aimPitch, this.yaw + this.rig.camYaw + this.aimYaw, shR);
 
     /* ---------- HUD ---------- */
     const alive = this.enemies.filter((e) => e.state !== "dead").length + this.spawnQueue.length;

@@ -65,6 +65,18 @@ export interface RecoilSpec {
   swayStiff: number;
   swayDamp: number;
 
+  /* ---- organic model ---- */
+  /** gas/bolt push duration, s — the slow second stage of a real shot */
+  gasT: number;
+  /** fraction of shove energy delivered during the gas stage */
+  gasSplit: number;
+  /** rifling twist bias, 0 = smoothbore, 1 = heavy rifle twist */
+  twistK: number;
+  /** how fast accumulated burst heat bleeds off, 1/s */
+  burstRecovery: number;
+  /** idle hold-sway amplitude — light guns dance, heavy guns sit */
+  holdSway: number;
+
   contacts: ContactPoint[];
 }
 
@@ -98,6 +110,11 @@ export const RECOIL_SPECS: RecoilSpec[] = [
     pushZeta: 0.34,
     swayStiff: 92,
     swayDamp: 8.5,
+    gasT: 0.05,
+    gasSplit: 0.3,
+    twistK: 0.5,
+    burstRecovery: 4.5,
+    holdSway: 1.0,
     /* one hand under the bore — everything becomes muzzle flip */
     contacts: [
       { name: "wrist", stiffness: 0.8, shoulder: false },
@@ -131,6 +148,11 @@ export const RECOIL_SPECS: RecoilSpec[] = [
     pushZeta: 0.85,
     swayStiff: 52,
     swayDamp: 17,
+    gasT: 0.1,
+    gasSplit: 0.35,
+    twistK: 0,
+    burstRecovery: 7,
+    holdSway: 0.55,
     /* stock in the shoulder anchors the rear — a heavy shove with real roll */
     contacts: [
       { name: "shoulder", stiffness: 0.7, shoulder: true },
@@ -165,6 +187,11 @@ export const RECOIL_SPECS: RecoilSpec[] = [
     pushZeta: 0.38,
     swayStiff: 85,
     swayDamp: 9.5,
+    gasT: 0.04,
+    gasSplit: 0.25,
+    twistK: 0.45,
+    burstRecovery: 5.5,
+    holdSway: 0.7,
     /* grip-mass design: bore nearly in line with the hands — a light buzz */
     contacts: [
       { name: "grip hand", stiffness: 0.65, shoulder: false },
@@ -198,6 +225,11 @@ export const RECOIL_SPECS: RecoilSpec[] = [
     pushZeta: 0.95,
     swayStiff: 42,
     swayDamp: 20,
+    gasT: 0.08,
+    gasSplit: 0.4,
+    twistK: 1.0,
+    burstRecovery: 3.2,
+    holdSway: 0.4,
     /* bedded into the shoulder with a cheek weld — energy goes straight
        back into the body, the muzzle barely levers up */
     contacts: [
@@ -222,6 +254,8 @@ const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 type SpringDOF = {
   pitch: number;
   pitchV: number;
+  pitchF: number;
+  pitchFV: number;
   push: number;
   pushV: number;
   yaw: number;
@@ -233,9 +267,13 @@ type SpringDOF = {
 };
 
 export class RecoilRig {
-  /* muzzle climb about the pivot (rad) + velocity */
+  /* ---- muzzle climb: two coupled modes ----
+     pitchF = the fast "crack" — frame/slide jerk, arrives in ~40 ms
+     pitch  = the slow mode — gas push + arm/frame heave, rides longer */
   pitch = 0;
   pitchV = 0;
+  pitchF = 0;
+  pitchFV = 0;
   /* recoverable horizontal snap + barrel torque about the bore axis */
   yaw = 0;
   yawV = 0;
@@ -247,20 +285,39 @@ export class RecoilRig {
   /* sight-picture dip under heavy shots */
   drop = 0;
   dropV = 0;
+  /* ---- camera followers: head/shoulder lag the gun, no overshoot ---- */
+  camPitch = 0;
+  camYaw = 0;
+  /* ---- staged gas/bolt push (velocity injected over gasT seconds) ---- */
+  private gasPitch = 0;
+  private gasPush = 0;
+  private gasYaw = 0;
+  private gasT = 0;
+  private gasT0 = 0.06;
+  /* ---- burst heat: sustained fire climbs more and recovers slower ---- */
+  burst = 0;
+  /* ---- human hold-sway (normalized ±1, scaled by the engine) ---- */
+  holdX = 0;
+  holdY = 0;
+  private swayT = Math.random() * 20;
   /* per-shot variance multiplier (0.85–1.45) — drives trauma/fov scaling */
   variance = 1;
   /* normalized shot energy 0–1 for lights and FX */
   energy = 0;
 
   /**
-   * Resolve one shot. Returns the permanent horizontal drift to bake into
-   * the player's real aim (asymmetric gas exit + shooter follow-through).
+   * Resolve one shot in two stages — the sharp initial crack lands now, the
+   * gas/bolt push bleeds in over `gasT` seconds. Returns the permanent
+   * horizontal drift to bake into the player's real aim (rifling walk +
+   * shooter follow-through).
    */
   fire(spec: RecoilSpec, aimAmt: number): number {
     this.variance = 0.85 + Math.random() * 0.6;
     /* bracing: a braced weld soaks impulse before it moves anything */
     const braced = 1 - 0.35 * aimAmt;
-    const J = spec.impulseNs * this.variance * braced;
+    /* burst heat — the more you pour in, the harder each round climbs */
+    this.burst = Math.min(1, this.burst + 0.3 * this.variance * braced);
+    const J = spec.impulseNs * this.variance * braced * (1 + 0.9 * this.burst);
     this.energy = clamp(J / 13, 0, 1.4);
 
     /* ---- contact-point absorption ---- */
@@ -277,27 +334,65 @@ export class RecoilRig {
 
     const M = spec.massKg;
     const I = M * spec.radiusGyrationM * spec.radiusGyrationM;
-
     const k = RECOIL_INTENSITY;
-    /* muzzle-rise torque: ω = J·h·climb·absorb / I, coupled by stance */
-    this.pitchV += ((J * spec.boreHeightM * spec.climbFactor * rotAbsorb) / I) * spec.stanceRot * k;
-    /* linear shove into the body: v = J·push·absorb / M */
-    this.pushV += ((J * spec.pushFactor * pushAbsorb) / M) * spec.stancePush * k;
+    /* staging splits energy across time, so re-normalize to keep the
+       approved peaks: inv ≈ 1/(1 + half the gas fraction as extra energy) */
+    const inv = 1 / (1 + 0.5 * spec.gasSplit);
 
-    /* secondary axes — scale with the gun's own recoil velocity J/M */
+    /* muzzle-rise torque: ω = J·h·climb·absorb / I, coupled by stance */
+    const climb = ((J * spec.boreHeightM * spec.climbFactor * rotAbsorb) / I) * spec.stanceRot * k * inv;
+    this.pitchFV += climb * 0.75; /* the crack */
+    this.pitchV += climb * 0.25; /* the heave */
+    this.gasPitch += climb * 0.55 * spec.gasSplit * 2.2; /* slow gas push */
+    this.gasT = Math.max(this.gasT, spec.gasT);
+    this.gasT0 = spec.gasT;
+
+    /* linear shove into the body: v = J·push·absorb / M */
+    const shove = ((J * spec.pushFactor * pushAbsorb) / M) * spec.stancePush * k * 1.05;
+    this.pushV += shove * 0.45;
+    this.gasPush += shove * 0.55;
+
+    /* secondary axes — scale with the gun's recoil velocity J/M, biased by
+       rifling twist (a rifle walks one way, a smoothbore scatters) */
     const vGun = J / M;
     const brace2 = 1 - 0.5 * aimAmt;
-    this.yawV += (Math.random() - 0.5) * 2 * vGun * spec.yawC * 8 * brace2 * k;
-    this.rollV += (Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.random() * 0.5) * vGun * spec.rollC * 8 * brace2 * k;
-    this.dropV += vGun * spec.dropC * 4 * braced * k;
+    const tw = spec.twistK;
+    this.yawV += ((Math.random() - 0.5) * 2 * 0.6 + tw * 0.5) * vGun * spec.yawC * 8 * brace2 * k;
+    this.rollV += ((Math.random() - 0.5) * 2 * 0.45 + tw * 0.65) * vGun * spec.rollC * 8 * brace2 * k;
+    this.gasYaw += tw * 0.25 * vGun * spec.yawC * 8 * brace2 * k;
+    this.dropV += vGun * spec.dropC * 4 * braced * k * (1 + 0.5 * this.burst);
 
-    /* permanent aim drift */
-    return (Math.random() - 0.5) * 2 * vGun * spec.driftC * 30 * k;
+    /* permanent aim drift — rifling walk + a burst-fatigued shooter */
+    return ((Math.random() - 0.5) * 2 * 0.7 + tw * 0.35) * vGun * spec.driftC * 30 * k * (1 + 0.5 * this.burst);
   }
 
-  /** Integrate every DOF as a damped spring back to rest. */
+  /**
+   * Advance the rig: bleed in the staged gas push, integrate every mode as a
+   * damped spring, run the camera followers and the human hold-sway.
+   */
   update(dt: number, spec: RecoilSpec, aimAmt: number) {
     dt = Math.min(dt, 0.05);
+
+    /* ---- staged gas/bolt push: front-weighted decay over gasT ---- */
+    if (this.gasT > 0 && this.gasT0 > 0) {
+      const u = this.gasT / this.gasT0; /* 1 → 0 */
+      const shape = 2 * u * (dt / this.gasT0); /* integrates to ~1 */
+      this.pitchV += this.gasPitch * shape;
+      this.pushV += this.gasPush * shape;
+      this.yawV += this.gasYaw * shape;
+      this.gasT -= dt;
+      if (this.gasT <= 0) {
+        this.gasPitch = 0;
+        this.gasPush = 0;
+        this.gasYaw = 0;
+      }
+    }
+
+    /* ---- burst heat decays; while hot the springs soften so the gun
+       rides higher and the climb stacks instead of resetting ---- */
+    this.burst *= Math.exp(-spec.burstRecovery * dt);
+    const recover = 1 - 0.5 * this.burst; /* 1 at rest → 0.5 mid-burst */
+
     const steps = 2;
     const h = dt / steps;
     /* a braced gun settles faster and overshoots less */
@@ -308,13 +403,30 @@ export class RecoilRig {
     const yawZ = Math.min(1, spec.pitchZeta * 1.3);
     const rollZ = Math.min(1, spec.pitchZeta * 1.05);
     const dropZ = Math.min(1, spec.pitchZeta + 0.18);
+    const wnSlow = spec.pitchWn * (0.8 + 0.2 * recover);
     for (let s = 0; s < steps; s++) {
-      this.spring(o, "pitch", "pitchV", spec.pitchWn, spec.pitchZeta + zBoost, h);
-      this.spring(o, "push", "pushV", spec.pushWn, spec.pushZeta + zBoost * 0.5, h);
+      /* the crack mode: fast, springy, settles in ~2× the frame time */
+      this.spring(o, "pitchF", "pitchFV", spec.pitchWn * 2.15, Math.min(0.6, spec.pitchZeta * 0.85) + zBoost, h);
+      this.spring(o, "pitch", "pitchV", wnSlow, spec.pitchZeta + zBoost, h);
+      this.spring(o, "push", "pushV", spec.pushWn * (0.85 + 0.15 * recover), spec.pushZeta + zBoost * 0.5, h);
       this.spring(o, "yaw", "yawV", spec.pitchWn * 1.15, yawZ + zBoost * 0.6, h);
       this.spring(o, "roll", "rollV", spec.pitchWn * 1.1, rollZ + zBoost * 0.5, h);
       this.spring(o, "drop", "dropV", spec.pitchWn * 0.8, dropZ, h);
     }
+
+    /* ---- camera followers: your head chases the gun exponentially —
+       guns overshoot, faces never do ---- */
+    const kf = 14 + 12 * aimAmt;
+    this.camPitch += (this.pitch + this.pitchF - this.camPitch) * (1 - Math.exp(-kf * dt));
+    this.camYaw += (this.yaw - this.camYaw) * (1 - Math.exp(-kf * 0.9 * dt));
+
+    /* ---- human hold-sway: incommensurate sines, fatter when the arms
+       are pumped full of recoil, steadier behind a sight picture ---- */
+    this.swayT += dt;
+    const t = this.swayT;
+    const amp = spec.holdSway * (0.55 + 0.9 * this.burst) * (1 - 0.7 * aimAmt);
+    this.holdX = (Math.sin(t * 2.13) * 0.38 + Math.sin(t * 3.47 + 1.3) * 0.27 + Math.sin(t * 0.53 + 2.1) * 0.35) * amp;
+    this.holdY = (Math.sin(t * 1.71 + 0.7) * 0.4 + Math.sin(t * 2.83 + 2.6) * 0.32 + Math.sin(t * 0.41) * 0.28) * amp;
   }
 
   private spring(o: SpringDOF, x: keyof SpringDOF, v: keyof SpringDOF, wn: number, zeta: number, h: number) {
@@ -325,18 +437,28 @@ export class RecoilRig {
     o[x] = xp + nv * h;
   }
 
-  /** Gun changed hands — kill velocities, let position glide to rest. */
+  /** Gun changed hands — kill velocities and staged pushes, let position glide. */
   softReset() {
     this.pitchV = 0;
+    this.pitchFV = 0;
     this.yawV = 0;
     this.rollV = 0;
     this.pushV = 0;
     this.dropV = 0;
+    this.gasPitch = 0;
+    this.gasPush = 0;
+    this.gasYaw = 0;
+    this.gasT = 0;
+    this.burst *= 0.4;
+    this.camPitch = this.pitch + this.pitchF;
+    this.camYaw = this.yaw;
   }
 
   hardReset() {
     this.pitch = 0;
     this.pitchV = 0;
+    this.pitchF = 0;
+    this.pitchFV = 0;
     this.yaw = 0;
     this.yawV = 0;
     this.roll = 0;
@@ -345,6 +467,14 @@ export class RecoilRig {
     this.pushV = 0;
     this.drop = 0;
     this.dropV = 0;
+    this.camPitch = 0;
+    this.camYaw = 0;
+    this.gasPitch = 0;
+    this.gasPush = 0;
+    this.gasYaw = 0;
+    this.gasT = 0;
+    this.gasT0 = 0.06;
+    this.burst = 0;
     this.energy = 0;
     this.variance = 1;
   }
