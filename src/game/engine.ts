@@ -2,16 +2,6 @@ import * as THREE from "three";
 import { sfx } from "./audio";
 import { buildRaiderRig, updateRaiderAnim, WINDUP_TIME, type RaiderRig } from "./raider";
 import { RecoilRig, RECOIL_SPECS, RECOIL_INTENSITY } from "./recoil";
-import { AMMO, effectiveDamage, muzzleVelocity, type AmmoId, type AmmoSpec } from "./ammo";
-import {
-  resolveZone,
-  zoneMultiplier,
-  falloff as falloffRet,
-  afterArmor,
-  hitstunFrom,
-  INTERRUPT_STAGGER,
-  BRUTE_POISE,
-} from "./damage";
 import { GUN_MODS, GUN_MOD_INDEX, type GunModId } from "./gunmods";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
@@ -141,11 +131,6 @@ interface Enemy {
   /* scrapper burst fire */
   burst: number;
   burstT: number;
-  /* combat stats */
-  armor: number; /* scrap plating — flat soak per hit, beaten by pierce */
-  poise: number; /* impact accumulator — when full, the raider reels */
-  poiseMax: number;
-  frameStagger: number; /* stagger landed this frame — breaks telegraphs */
   /* overhead damage gauge */
   barBackMat: THREE.MeshBasicMaterial;
   barFill: THREE.Mesh;
@@ -159,9 +144,10 @@ interface Barrel {
   dead: boolean;
 }
 
-/* Ammo drops are per-cartridge. Rarity follows stopping power: the harder a
-   round hits, the scarcer its supply crate (.45 is infinite, so it never drops). */
-type PickupKind = "health" | "shells" | "para" | "nato";
+/* Supply drops are per-weapon. Rarity follows how much damage the gun deals
+   per second of trigger time — the harder it outputs, the scarcer its crate
+   (the pistol eats infinite rounds, so it never drops). */
+type PickupKind = "health" | "shells" | "smg" | "belt";
 
 interface Pickup {
   group: THREE.Group;
@@ -172,10 +158,10 @@ interface Pickup {
 interface WeaponDef {
   name: string;
   tag: string;
-  /** cartridge this gun is chambered for — damage comes from the ammo card */
-  ammoId: AmmoId;
-  /** fitted barrel length, inches — longer barrels squeeze more velocity */
-  barrelIn: number;
+  /** flat damage per projectile — tuned by hand, no ballistics underneath */
+  dmg: number;
+  /** generic supply name used by drops and the HUD */
+  ammoName: string;
   pellets: number;
   spread: number;
   kick: number;
@@ -186,6 +172,14 @@ interface WeaponDef {
   fovPunch: number;
   bloom: number;
   moveMul: number;
+  /** shove per hit — 4+ also breaks a wound-up melee attack */
+  knock: number;
+  /** muzzle flash size multiplier */
+  flash: number;
+  /** tracer color */
+  tracer: string;
+  /** how hard a kill throws the ragdoll */
+  ragdoll: number;
 }
 
 /* ============================== Engine ============================== */
@@ -201,26 +195,24 @@ const ARENA = 31;
 const UP = new THREE.Vector3(0, 1, 0);
 const TRACER_SPEED = 340; /* world units/sec the streak head travels */
 
-/* Barrel lengths are measured off the viewmodels: P-9 ~5.1" service barrel,
-   M870 18.5" cylinder, VK-9 9" stub, MG-7 22" heavy barrel. Damage is then
-   whatever the chambered load makes of that steel (see ammo.ts). */
+/* Balance contract — every gun lands in the same ~170–190 sustained-DPS
+   band, and each one pays for its niche so no weapon is the obvious answer:
+   · P-9   26 dmg × 6.45 rps ≈ 168 — precision + infinite supply, lowest DPS
+   · M870  14 × 8 pellets ≈ 112/blast — close-range delete + parry, ammo-starved
+   · VK-9  15 dmg × 12.2 rps ≈ 183 — hottest trigger, worst bloom, eats supply
+   · MG-7  22 dmg × 8.5 rps ≈ 187 — a 60-round hose, but it lugs at 85% speed,
+           takes 2.6s to re-belt, blooms badly and can't break an attack */
 const WEAPONS: WeaponDef[] = [
-  { name: "P-9 SCRAPLOCK", tag: "P-9", ammoId: "acp45", barrelIn: 5.1, pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2, bloom: 0.052, moveMul: 1 },
-  { name: "M870 BREAKER", tag: "BREAKER", ammoId: "buck12", barrelIn: 18.5, pellets: 8, spread: 0.055, kick: 0.06, cooldown: 0.82, magSize: 6, reloadTime: 0.5, auto: false, fovPunch: 5, bloom: 0.02, moveMul: 1 },
-  /* western-block prototype SMG — full-auto volume at the price of ammo,
-     a long mag swap and the worst heat bloom of the three */
-  { name: "VK-9 WESPE", tag: "VK-9", ammoId: "para9", barrelIn: 9.0, pellets: 1, spread: 0.013, kick: 0.0075, cooldown: 0.082, magSize: 24, reloadTime: 1.4, auto: true, fovPunch: 0.5, bloom: 0.09, moveMul: 1 },
-  /* belt-fed 7.62 general-purpose gun — M60/M2 lineage. Its niche is
-     SUSTAINED fire: a 60-round box, slow barrel heating and heavy stagger.
-     Balanced by: DPS equal to the pistol (not above it), the slowest cyclic
-     of the autos, a 2.6s belt swap, scarce 7.62, heavy climb under full
-     auto and lugging the pig at 85% speed */
-  { name: "MG-7 HOG", tag: "MG-7", ammoId: "nato762", barrelIn: 22.0, pellets: 1, spread: 0.02, kick: 0.02, cooldown: 0.118, magSize: 60, reloadTime: 2.6, auto: true, fovPunch: 1.0, bloom: 0.07, moveMul: 0.85 },
+  { name: "P-9 SCRAPLOCK", tag: "P-9", dmg: 26, ammoName: "PISTOL ROUNDS", pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2, bloom: 0.052, moveMul: 1, knock: 1.6, flash: 0.62, tracer: "#ffe8b0", ragdoll: 5.5 },
+  { name: "M870 BREAKER", tag: "BREAKER", dmg: 14, ammoName: "SHOTGUN SHELLS", pellets: 8, spread: 0.055, kick: 0.06, cooldown: 0.82, magSize: 6, reloadTime: 0.5, auto: false, fovPunch: 5, bloom: 0.02, moveMul: 1, knock: 6.5, flash: 1.0, tracer: "#ffc37e", ragdoll: 11 },
+  /* full-auto volume at the price of supply, a long mag swap and the
+     worst heat bloom in the rack */
+  { name: "VK-9 WESPE", tag: "VK-9", dmg: 15, ammoName: "SMG ROUNDS", pellets: 1, spread: 0.013, kick: 0.0075, cooldown: 0.082, magSize: 24, reloadTime: 1.4, auto: true, fovPunch: 0.5, bloom: 0.09, moveMul: 1, knock: 1.0, flash: 0.46, tracer: "#ffe08f", ragdoll: 4.2 },
+  /* the hose: sustained suppressive fire and a heavy shove — paid for with
+     a slow crawl, the longest reload, scarce belts, heavy climb and a
+     projectile too light to stagger an attack mid-swing */
+  { name: "MG-7 HOG", tag: "MG-7", dmg: 22, ammoName: "LMG BELT", pellets: 1, spread: 0.02, kick: 0.02, cooldown: 0.118, magSize: 60, reloadTime: 2.6, auto: true, fovPunch: 1.0, bloom: 0.085, moveMul: 0.85, knock: 3.0, flash: 0.8, tracer: "#ffb45e", ragdoll: 8 },
 ];
-
-/* damage resolved once per barrel/load pairing: stopping power × (v/vRef)² */
-const WEAPON_AMMO: AmmoSpec[] = WEAPONS.map((wp) => AMMO[wp.ammoId]);
-const WEAPON_DMG: number[] = WEAPONS.map((wp) => effectiveDamage(AMMO[wp.ammoId], wp.barrelIn));
 
 /* ============================== Skill pool ============================== */
 
@@ -249,16 +241,16 @@ const SKILLS: SkillDef[] = [
   { id: "berserk", name: "REDLINE VALVE", desc: "Below 40% integrity: +30% damage, +15% speed.", tag: "ABILITY", rarity: "epic", maxLevel: 2, weight: 1.6 },
 ];
 
-const ENEMY_DEFS: Record<EnemyKind, { hp: number; speed: number; dmg: number; range: number; score: number; scale: number; armor: number; poise: number }> = {
-  /* gunmen: hold mid range, strafe, and fire in staggered bursts —
+const ENEMY_DEFS: Record<EnemyKind, { hp: number; speed: number; dmg: number; range: number; score: number; scale: number }> = {
+  /* gunmen: hold mid range and fire in staggered bursts —
      their bullets hurt a little less and fly a little slower than fear suggests */
-  scrapper: { hp: 90, speed: 3.2, dmg: 6, range: 8, score: 100, scale: 1, armor: 0, poise: 0 },
+  scrapper: { hp: 90, speed: 3.2, dmg: 6, range: 8, score: 100, scale: 1 },
   /* sprinters: quick, but a determined walk (5.8) nearly matches them and
      a sprint (8.4) leaves them behind */
-  runner: { hp: 51, speed: 5.6, dmg: 5, range: 1.55, score: 150, scale: 0.88, armor: 0, poise: 0 },
-  /* heavies: plated scrap armor soaks small calibers — bring 7.62, buck at
-     point-blank, or aim for the head. Enough impact staggers them out of attacks. */
-  brute: { hp: 405, speed: 2.2, dmg: 22, range: 2.7, score: 400, scale: 1.45, armor: 12, poise: BRUTE_POISE },
+  runner: { hp: 51, speed: 5.6, dmg: 5, range: 1.55, score: 150, scale: 0.88 },
+  /* heavies: a wall of hitpoints and a wide cleave — every gun hurts them
+     equally, the question is how much ammo you can afford to spend */
+  brute: { hp: 405, speed: 2.2, dmg: 22, range: 2.7, score: 400, scale: 1.45 },
 };
 
 const FLASH_WHITE = new THREE.Color("#ffffff");
@@ -1711,9 +1703,7 @@ export class FoundryGame {
         this.tmpQ2.setFromAxisAngle(this.tmpV3.set(0, 0, 1), Math.random() * Math.PI * 2);
         f.group.quaternion.copy(this.camera.quaternion).multiply(this.tmpQ2);
         /* suppressor trims the flash to a dim puff; a brake flares it wider */
-        const base =
-          WEAPON_AMMO[this.weaponIdx].flashScale *
-          (this.hasMod("suppressor") ? 0.35 : this.hasMod("brake") ? 1.25 : 1);
+        const base = WEAPONS[this.weaponIdx].flash * (this.hasMod("suppressor") ? 0.35 : this.hasMod("brake") ? 1.25 : 1);
         f.len = base * (0.8 + Math.random() * 0.45);
         f.wid = f.len * (0.78 + Math.random() * 0.3);
         f.group.scale.set(f.len, f.wid, 1);
@@ -1828,10 +1818,6 @@ export class FoundryGame {
       enraged: false,
       burst: 0,
       burstT: 0,
-      armor: def.armor,
-      poise: 0,
-      poiseMax: def.poise,
-      frameStagger: 0,
       barBackMat,
       barFill,
       barMat,
@@ -1877,8 +1863,6 @@ export class FoundryGame {
     dmg: number,
     point: THREE.Vector3,
     head: boolean,
-    pierce: number,
-    stagger: number,
     knock: number,
     dir: THREE.Vector3,
     weaponTag: string,
@@ -1886,21 +1870,14 @@ export class FoundryGame {
   ) {
     if (e.state === "dead") return;
     if (e.state === "charge" && !head) dmg *= 0.5; /* charging brutes shrug off body shots */
-    /* ---- plating: flat soak unless the round's pierce outranks it ---- */
-    const { dealt, absorbed } = afterArmor(dmg, e.armor, pierce);
-    e.hp -= dealt;
+    e.hp -= dmg;
     e.flash = 1;
-    /* ---- impact: heavier rounds stun longer; enough impact in one frame
-           breaks a wound-up attack; enough on the poise meter reels them ---- */
-    e.hitstun = Math.max(e.hitstun, hitstunFrom(stagger));
+    e.hitstun = 0.13;
     e.kvx += dir.x * knock;
     e.kvz += dir.z * knock;
-    e.frameStagger += stagger;
-    if (absorbed > dmg * 0.35) {
-      /* round bounced off the plate — sparks instead of blood */
-      this.spawnParticles(point, 3, ["#c9ced4", "#8a8f96", "#ffb42e"], 2.4, 0.2, 6);
-    }
-    if (e.state === "windup" && e.frameStagger >= INTERRUPT_STAGGER) {
+    /* only a genuinely heavy blow (shotgun blast, barrel blast) breaks a
+       wound-up attack — light full-auto fire must not stun-lock */
+    if (e.state === "windup" && knock >= 4) {
       e.state = "chase";
       e.stateT = 0;
       e.attackCd = Math.max(e.attackCd, 0.7);
@@ -1909,17 +1886,6 @@ export class FoundryGame {
       e.state = "stagger";
       e.stateT = 0;
       e.attackCd = 1.0;
-    }
-    if (e.poiseMax > 0) {
-      e.poise += stagger;
-      if (e.poise >= e.poiseMax && e.state !== "stagger") {
-        /* composure shattered — the raider reels, wide open */
-        e.poise = 0;
-        e.state = "stagger";
-        e.stateT = 0;
-        e.attackCd = Math.max(e.attackCd, 1.2);
-        sfx.barrelClang();
-      }
     }
     this.spawnParticles(point, head ? 12 : 7, ["#c42418", "#8a160c", "#ffb42e"], 4.5, 0.45, 10);
     sfx.hitEnemy(head);
@@ -1955,13 +1921,13 @@ export class FoundryGame {
     else if (r < 0.23 * this.dropMul) this.dropPickup(e.group.position, this.rollAmmoDrop());
   }
 
-  /* Rarity tracks stopping power — the harder the round hits, the scarcer
-     its supply. .45 is infinite so it never appears here. */
+  /* Rarity tracks raw output — the harder a gun hits, the scarcer its
+     supply. Pistol rounds are infinite so they never appear here. */
   private rollAmmoDrop(): PickupKind {
     const table: { kind: PickupKind; weight: number }[] = [
-      { kind: "shells", weight: 5.0 }, /* 21 dmg/pellet — plentiful */
-      { kind: "para", weight: 3.0 }, /* 29 dmg — uncommon */
-      { kind: "nato", weight: 0.8 }, /* 68 dmg — rare */
+      { kind: "shells", weight: 5.0 }, /* shotgun shells — plentiful */
+      { kind: "smg", weight: 3.0 }, /* smg rounds — uncommon */
+      { kind: "belt", weight: 0.8 }, /* lmg belt — rare */
     ];
     let total = 0;
     for (const t of table) total += t.weight;
@@ -1989,8 +1955,8 @@ export class FoundryGame {
       /* per-cartridge supply crate — rarity reads in the paint */
       const palette: Record<Exclude<PickupKind, "health">, { box: string; band: string }> = {
         shells: { box: "#7a3324", band: "#ff6b4a" }, /* common — red shotgun box */
-        para: { box: "#5c6248", band: "#a8c46a" }, /* uncommon — olive 9mm crate */
-        nato: { box: "#3d4348", band: "#ffb42e" }, /* rare — dark 7.62 ammo can */
+        smg: { box: "#5c6248", band: "#a8c46a" }, /* uncommon — olive smg crate */
+        belt: { box: "#3d4348", band: "#ffb42e" }, /* rare — dark lmg ammo can */
       };
       const c = palette[kind];
       const box = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.3, 0.36), new THREE.MeshLambertMaterial({ color: c.box, flatShading: true }));
@@ -2142,10 +2108,9 @@ export class FoundryGame {
 
     const berserkOn = this.berserk && this.hp < this.maxHp * 0.4;
     const crit = Math.random() < this.critChance;
-    const amm = WEAPON_AMMO[this.weaponIdx];
-    /* base is the load's stopping power at this barrel's velocity */
+    /* flat weapon damage — crits triple it, headshots (below) double it */
     const dmg =
-      WEAPON_DMG[this.weaponIdx] *
+      w.dmg *
       this.dmgMul *
       this.modDmgMul() *
       (berserkOn ? 1 + 0.3 * this.berserkBonus : 1) *
@@ -2169,13 +2134,9 @@ export class FoundryGame {
         if (data) {
           if (data.kind === "enemy") {
             anyHit = true;
-            /* ---- damage pipeline: zone × falloff × (crit folded into dmg) ---- */
-            const def = ENEMY_DEFS[data.enemy.kind as EnemyKind];
-            const relY = (hits[0].point.y - data.enemy.group.position.y) / (1.75 * def.scale);
-            const zone = resolveZone(relY);
-            const retained = falloffRet(amm.falloff, hits[0].distance);
-            const shotDmg = dmg * zoneMultiplier(zone, amm.headMul) * retained;
-            this.damageEnemy(data.enemy, shotDmg, hits[0].point, zone === "head", amm.pierce, amm.stagger, amm.knockback, dir, w.tag, amm.ragdollForce);
+            /* flat damage; a hit above the shoulders pays double */
+            const head = hits[0].point.y - data.enemy.group.position.y > 1.42 * ENEMY_DEFS[data.enemy.kind as EnemyKind].scale;
+            this.damageEnemy(data.enemy, dmg * (head ? 2 : 1), hits[0].point, head || crit, w.knock, dir, w.tag, w.ragdoll);
           } else if (data.kind === "barrel") {
             anyHit = true;
             this.hitBarrel(data.barrel, w.tag);
@@ -2185,7 +2146,7 @@ export class FoundryGame {
           }
         }
       }
-      this.spawnTracer(origin, hitPoint, amm.tracer);
+      this.spawnTracer(origin, hitPoint, w.tracer);
     }
     if (anyHit) this.shotsHit++;
     return true;
@@ -2223,8 +2184,7 @@ export class FoundryGame {
         const dir3 = new THREE.Vector3(dirX, 0.6 * fall + 0.25, dirZ).normalize();
         const pt3 = e.group.position.clone();
         pt3.y += 1.05;
-        /* blast ignores plating and staggers anything caught in it */
-        this.damageEnemy(e, 150 * fall + 40, pt3, false, 999, 18, 12 * fall, dir3, "BARREL", 15 * fall + 8);
+        this.damageEnemy(e, 150 * fall + 40, pt3, false, 12 * fall, dir3, "BARREL", 15 * fall + 8);
       }
     }
     const pd = this.pos.distanceTo(pos);
@@ -2859,13 +2819,13 @@ export class FoundryGame {
           this.onEvent({ type: "pickup", text: "+25 HP" });
         } else if (p.kind === "shells") {
           this.reserves[1] = Math.min(this.reserveCap(1), this.reserves[1] + 6);
-          this.onEvent({ type: "pickup", text: "+6 SHELLS" });
-        } else if (p.kind === "para") {
-          this.reserves[2] = Math.min(this.reserveCap(2), this.reserves[2] + 20);
-          this.onEvent({ type: "pickup", text: "+20 ROUNDS 9×19" });
-        } else if (p.kind === "nato") {
-          this.reserves[3] = Math.min(this.reserveCap(3), this.reserves[3] + 24);
-          this.onEvent({ type: "pickup", text: "+24 BELT 7.62" });
+          this.onEvent({ type: "pickup", text: "+6 SHOTGUN SHELLS" });
+        } else if (p.kind === "smg") {
+          this.reserves[2] = Math.min(this.reserveCap(2), this.reserves[2] + 24);
+          this.onEvent({ type: "pickup", text: "+24 SMG ROUNDS" });
+        } else if (p.kind === "belt") {
+          this.reserves[3] = Math.min(this.reserveCap(3), this.reserves[3] + 30);
+          this.onEvent({ type: "pickup", text: "+30 LMG BELT" });
         }
         sfx.pickup(p.kind === "health" ? "health" : "ammo");
         p.life = 0;
@@ -2911,9 +2871,10 @@ export class FoundryGame {
       reserve: this.weaponIdx === 0 ? -1 : this.reserves[this.weaponIdx],
       weapon: this.weaponIdx,
       weaponName: w.name,
-      ammoLine: `${WEAPON_AMMO[this.weaponIdx].designation} · ${Math.round(
-        muzzleVelocity(WEAPON_AMMO[this.weaponIdx], w.barrelIn)
-      ).toLocaleString("en-US")} FPS · DMG ${Math.round(WEAPON_DMG[this.weaponIdx])} · AP ${WEAPON_AMMO[this.weaponIdx].pierce}`,
+      ammoLine:
+        w.pellets > 1
+          ? `${w.dmg}×${w.pellets} DMG · PUMP · ${w.ammoName}`
+          : `${w.dmg} DMG · ${(1 / w.cooldown).toFixed(1)} RPS · ${w.ammoName}`,
       mods: this.modsCache,
       wave: this.wave,
       score: this.score,
@@ -2938,9 +2899,6 @@ export class FoundryGame {
     for (const m of e.rig.flashMats) m.emissive.setRGB(e.flash * 0.85, e.flash * 0.1, e.flash * 0.04);
     e.rig.eyeMat.color.copy(e.rig.eyeBase).lerp(FLASH_WHITE, e.flash * 0.8);
     e.attackCd -= dt;
-    /* per-frame impact accumulator resets; composure slowly rebuilds */
-    e.frameStagger = 0;
-    if (e.poiseMax > 0) e.poise = Math.max(0, e.poise - 12 * dt);
     e.feintCd -= dt;
 
     /* desperation — wounded raiders fight faster, eyes burning */
