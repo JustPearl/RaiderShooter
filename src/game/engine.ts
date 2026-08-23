@@ -132,6 +132,10 @@ interface Enemy {
   /* scrapper burst fire */
   burst: number;
   burstT: number;
+  /* overhead damage gauge */
+  barBackMat: THREE.MeshBasicMaterial;
+  barFill: THREE.Mesh;
+  barMat: THREE.MeshBasicMaterial;
 }
 
 interface Barrel {
@@ -232,12 +236,13 @@ const SKILLS: SkillDef[] = [
 ];
 
 const ENEMY_DEFS: Record<EnemyKind, { hp: number; speed: number; dmg: number; range: number; score: number; scale: number }> = {
-  /* gunmen: hold mid range, strafe, and fire in staggered bursts */
-  scrapper: { hp: 90, speed: 3.5, dmg: 8, range: 8.5, score: 100, scale: 1 },
-  /* sprinters: faster than ever, and they close instead of circling */
-  runner: { hp: 51, speed: 7.3, dmg: 6, range: 1.55, score: 150, scale: 0.88 },
-  /* heavies: wide cleaving swings, shockwaves, real threat pressure */
-  brute: { hp: 405, speed: 2.35, dmg: 30, range: 2.7, score: 400, scale: 1.45 },
+  /* gunmen: hold mid range, strafe, and fire in staggered bursts —
+     their bullets hurt a little less and fly a little slower than fear suggests */
+  scrapper: { hp: 60, speed: 3.2, dmg: 6, range: 8, score: 100, scale: 1 },
+  /* sprinters: quick, but a determined sprint (8.4) leaves them behind */
+  runner: { hp: 34, speed: 6.3, dmg: 5, range: 1.55, score: 150, scale: 0.88 },
+  /* heavies: wide cleaving swings, shockwaves — threatening, not bulletproof */
+  brute: { hp: 250, speed: 2.2, dmg: 22, range: 2.7, score: 400, scale: 1.45 },
 };
 
 const FLASH_WHITE = new THREE.Color("#ffffff");
@@ -1745,12 +1750,23 @@ export class FoundryGame {
     const def = ENEMY_DEFS[kind];
     const rig = buildRaiderRig(kind);
     const g = rig.group;
-    const scaleHp = 1 + (this.wave - 1) * 0.16;
-    const scaleSp = 1 + Math.min(this.wave, 14) * 0.022;
+    const scaleHp = 1 + (this.wave - 1) * 0.12;
+    const scaleSp = 1 + Math.min(this.wave, 14) * 0.016;
 
     const s = def.scale;
     g.scale.setScalar(s);
     g.position.set(x, -1.4 * s, z);
+
+    /* overhead damage gauge — appears the moment a raider takes a hit,
+       drains left-to-right and shifts green → red as it empties */
+    const barBackMat = new THREE.MeshBasicMaterial({ color: "#0d0a07", transparent: true, opacity: 0, depthWrite: false });
+    const barMat = new THREE.MeshBasicMaterial({ color: "#7dff5e", transparent: true, opacity: 0, depthWrite: false });
+    const barBack = new THREE.Mesh(new THREE.PlaneGeometry(0.94, 0.105), barBackMat);
+    const barFill = new THREE.Mesh(new THREE.PlaneGeometry(0.86, 0.06), barMat);
+    barBack.position.set(0, 2.18, 0);
+    barFill.position.set(0, 2.18, 0.002);
+    g.add(barBack);
+    g.add(barFill);
 
     /* runners alternate orbit sides to pincer; scrappers grow bolder each wave */
     const orbitDir = kind === "runner" ? -this.lastRunnerDir : Math.random() < 0.5 ? -1 : 1;
@@ -1797,6 +1813,9 @@ export class FoundryGame {
       enraged: false,
       burst: 0,
       burstT: 0,
+      barBackMat,
+      barFill,
+      barMat,
     };
     hitData.enemy = enemy;
     g.traverse((o) => {
@@ -2216,11 +2235,13 @@ export class FoundryGame {
   private beginWave() {
     this.wave++;
     this.secondWindUsed = false;
-    const count = Math.min(6 + this.wave * 2 + Math.floor(this.wave * this.wave * 0.18), 26);
-    const brutes = this.wave >= 3 ? Math.min(1 + Math.floor((this.wave - 3) / 2), 5) : 0;
-    const runners = this.wave >= 2 ? Math.floor(count * 0.3) : 0;
-    /* gunmen hold mid range — they join the fight from wave 2 */
-    const scrappers = this.wave >= 2 ? Math.max(1, count - brutes - runners) : 0;
+    /* a fair ramp: wave 1 is a small pack of sprinters to learn the guns on,
+       gunmen join at wave 2, heavies at wave 3 — never a sudden wall */
+    const count = Math.min(3 + this.wave * 2 + Math.floor(this.wave * this.wave * 0.14), 24);
+    const brutes = this.wave >= 3 ? Math.min(1 + Math.floor((this.wave - 3) / 2), 4) : 0;
+    const scrappers =
+      this.wave >= 2 ? Math.max(1, Math.min(count - brutes - 2, 1 + Math.floor((this.wave - 1) * 0.8))) : 0;
+    const runners = Math.max(2, count - brutes - scrappers);
     this.spawnQueue = [];
     for (let i = 0; i < scrappers; i++) this.spawnQueue.push("scrapper");
     for (let i = 0; i < runners; i++) this.spawnQueue.push("runner");
@@ -2867,7 +2888,7 @@ export class FoundryGame {
     e.feintCd -= dt;
 
     /* desperation — wounded raiders fight faster, eyes burning */
-    if (!e.enraged && e.state !== "dead" && e.hp < e.maxHp * 0.3) {
+    if (!e.enraged && e.state !== "dead" && e.hp < e.maxHp * 0.25) {
       e.enraged = true;
       e.speed *= 1.18;
       sfx.spawnRoar();
@@ -2875,6 +2896,15 @@ export class FoundryGame {
     if (e.enraged) {
       e.rig.eyeMat.color.lerp(FLASH_WHITE, (Math.sin(t * 9 + e.rig.seed) + 1) * 0.3);
     }
+
+    /* damage gauge — lights up on the first hit, drains left-to-right,
+       hue slides green → red as the raider nears scrap */
+    e.barMat.opacity = e.state === "dead" || e.state === "rise" ? 0 : e.hp < e.maxHp ? 0.95 : 0;
+    e.barBackMat.opacity = e.barMat.opacity * 0.75;
+    const ratio = Math.max(0, Math.min(1, e.hp / e.maxHp));
+    e.barFill.scale.x = Math.max(0.001, ratio);
+    e.barFill.position.x = -(1 - ratio) * 0.43;
+    e.barMat.color.setHSL(0.33 * ratio, 0.9, 0.55);
 
     if (e.state === "dead") {
       e.stateT += dt;
@@ -2938,7 +2968,7 @@ export class FoundryGame {
 
       if (e.kind === "scrapper") {
         /* GUNNER: hold the shooting band and strafe, don't chase down */
-        const band = 8.5;
+        const band = e.range;
         const radial = Math.max(-0.9, Math.min(0.9, (dist - band) * 0.9));
         const strafe = Math.sin(e.wobble * 1.4 + e.orbitDir) * e.orbitDir;
         moveX = tangX * strafe * 1.1 + dirX * radial;
@@ -3006,14 +3036,15 @@ export class FoundryGame {
         e.group.position.z -= dirZ * 0.4;
       }
 
-      if (dist < e.range && canAttack) {
+      /* gunners won't pull the trigger at point-blank — they back off instead */
+      if (dist < e.range && canAttack && (e.kind !== "scrapper" || dist > 2.3)) {
         e.state = "windup";
         e.stateT = 0;
         if (e.kind === "scrapper") {
           /* staggered group fire — each gun waits its turn, so volleys arrive
              in waves instead of one wall of lead */
           const gunsInVolley = this.enemies.filter((o) => o !== e && o.kind === "scrapper" && o.state !== "dead" && (o.state === "windup" || o.state === "strike")).length;
-          e.attackCd = 1.9 + Math.min(gunsInVolley, 3) * 0.35 + Math.random() * 0.8;
+          e.attackCd = 2.3 + Math.min(gunsInVolley, 3) * 0.5 + Math.random() * 0.9;
         }
       } else if (e.kind === "brute" && this.wave >= 2 && e.attackCd <= 0 && tokens < this.maxAttackers() && dist > 5 && dist < 13.5) {
         /* bull rush from mid range */
@@ -3045,8 +3076,8 @@ export class FoundryGame {
         e.burstT -= dt;
         if (e.burstT <= 0 && e.burst > 0) {
           e.burst--;
-          e.burstT = 0.17;
-          const spreadMul = Math.max(0.6, 1 - (this.wave - 1) * 0.035);
+          e.burstT = 0.19;
+          const spreadMul = Math.max(0.62, 1 - (this.wave - 1) * 0.03);
           this.spawnRaiderBullet(e, spreadMul);
         }
         if (e.burstT > 0.05) {
@@ -3128,7 +3159,7 @@ export class FoundryGame {
         const dNow = Math.hypot(this.pos.x - e.group.position.x, this.pos.z - e.group.position.z);
         if (dNow < 1.55) {
           /* trampled */
-          this.damagePlayer(e.dmg * 2, e.group.position);
+          this.damagePlayer(e.dmg * 1.75, e.group.position);
           this.trauma = Math.min(1.4, this.trauma + 0.5);
           sfx.barrelClang();
           e.state = "stagger";
@@ -3311,10 +3342,10 @@ export class FoundryGame {
     const ox = this.tmpV.x;
     const oy = this.tmpV.y;
     const oz = this.tmpV.z;
-    /* lead the target slightly, then smear with wave-scaled inaccuracy */
-    const tx = this.pos.x + this.vel.x * 0.22;
+    /* lead the target a touch, then smear with wave-scaled inaccuracy */
+    const tx = this.pos.x + this.vel.x * 0.12;
     const ty = 1.35 + this.pos.y;
-    const tz = this.pos.z + this.vel.z * 0.22;
+    const tz = this.pos.z + this.vel.z * 0.12;
     let dx = tx - ox;
     let dy = ty - oy;
     let dz = tz - oz;
@@ -3323,7 +3354,7 @@ export class FoundryGame {
     dy /= len;
     dz /= len;
     /* sloppy iron sights — wide cone that only tightens slowly with waves */
-    const sm = 0.2 * spreadMul;
+    const sm = 0.24 * spreadMul;
     dx += (Math.random() - 0.5) * sm;
     dy += (Math.random() - 0.5) * sm * 0.6;
     dz += (Math.random() - 0.5) * sm;
@@ -3334,7 +3365,7 @@ export class FoundryGame {
     this.bDir[i * 3] = dx / dl;
     this.bDir[i * 3 + 1] = dy / dl;
     this.bDir[i * 3 + 2] = dz / dl;
-    this.bSpd[i] = 24;
+    this.bSpd[i] = 20;
     b.life = 1.4;
     b.mesh.visible = true;
     b.mat.opacity = 0.9;

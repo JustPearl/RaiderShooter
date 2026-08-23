@@ -11,8 +11,8 @@ import * as THREE from "three";
 export type RaiderKind = "scrapper" | "runner" | "brute";
 
 export const WINDUP_TIME: Record<RaiderKind, number> = {
-  scrapper: 0.55, /* aim telegraph — enough time to break line of sight */
-  runner: 0.34,
+  scrapper: 0.6, /* aim telegraph — enough time to break line of sight */
+  runner: 0.38, /* a beat you can backpedal out of */
   brute: 0.62,
 };
 
