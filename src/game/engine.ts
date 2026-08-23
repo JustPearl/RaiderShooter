@@ -2097,10 +2097,12 @@ export class FoundryGame {
     this.yaw -= this.mouseDX * sens;
     this.pitch -= this.mouseDY * sens;
     this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch));
-    /* gun sway spring gets an impulse from look velocity (damped while aiming) */
+    /* gun sway spring gets an impulse from look velocity (damped while aiming).
+       Heavier guns resist the flick: impulse response falls off ~1/√mass */
     const swDamp = 1 - 0.55 * this.aimAmt;
-    this.swayVX += this.mouseDX * 0.011 * swDamp;
-    this.swayVY += this.mouseDY * 0.009 * swDamp;
+    const swImp = 1 / Math.sqrt(this.rigSpec.massKg / 1.5);
+    this.swayVX += this.mouseDX * 0.011 * swDamp * swImp;
+    this.swayVY += this.mouseDY * 0.009 * swDamp * swImp;
     this.mouseDX = 0;
     this.mouseDY = 0;
 
@@ -2193,9 +2195,10 @@ export class FoundryGame {
     this.aimAmt += (wantAim - this.aimAmt) * Math.min(1, dt * (wantAim ? 12 : 9));
     const aim = this.aimAmt;
 
-    /* ---------- sway spring integration ---------- */
-    const swSt = 70;
-    const swDm = 12;
+    /* ---------- sway spring integration — per-gun: light guns are springy
+       and lively in the hands, heavy guns are damped and inertial ---------- */
+    const swSt = this.rigSpec.swayStiff;
+    const swDm = this.rigSpec.swayDamp;
     this.swayVX += (-this.swayX * swSt - this.swayVX * swDm) * dt;
     this.swayVY += (-this.swayY * swSt - this.swayVY * swDm) * dt;
     this.swayX += this.swayVX * dt;
