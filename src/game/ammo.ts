@@ -84,7 +84,7 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     velGainPerIn: 20,
     energyJ: 310, /* per pellet */
     /* 310 J per pellet — nine of them is what makes it hurt */
-    baseDamage: 21,
+    baseDamage: 18,
     knockback: 2.5, /* per pellet — eight hits stack into a real shove */
     ragdollForce: 4,
     flashScale: 1.0,

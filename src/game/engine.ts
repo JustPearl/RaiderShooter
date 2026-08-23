@@ -212,9 +212,9 @@ const SKILLS: SkillDef[] = [
 ];
 
 const ENEMY_DEFS: Record<EnemyKind, { hp: number; speed: number; dmg: number; range: number; score: number; scale: number }> = {
-  scrapper: { hp: 60, speed: 3.5, dmg: 8, range: 1.75, score: 100, scale: 1 },
-  runner: { hp: 34, speed: 5.7, dmg: 6, range: 1.55, score: 150, scale: 0.88 },
-  brute: { hp: 270, speed: 2.35, dmg: 22, range: 2.35, score: 400, scale: 1.45 },
+  scrapper: { hp: 180, speed: 3.5, dmg: 8, range: 1.75, score: 100, scale: 1 },
+  runner: { hp: 102, speed: 5.7, dmg: 6, range: 1.55, score: 150, scale: 0.88 },
+  brute: { hp: 810, speed: 2.35, dmg: 22, range: 2.35, score: 400, scale: 1.45 },
 };
 
 const FLASH_WHITE = new THREE.Color("#ffffff");
