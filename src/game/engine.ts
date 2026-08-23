@@ -219,9 +219,9 @@ const SKILLS: SkillDef[] = [
 ];
 
 const ENEMY_DEFS: Record<EnemyKind, { hp: number; speed: number; dmg: number; range: number; score: number; scale: number }> = {
-  scrapper: { hp: 180, speed: 3.5, dmg: 8, range: 1.75, score: 100, scale: 1 },
-  runner: { hp: 102, speed: 5.7, dmg: 6, range: 1.55, score: 150, scale: 0.88 },
-  brute: { hp: 810, speed: 2.35, dmg: 22, range: 2.35, score: 400, scale: 1.45 },
+  scrapper: { hp: 90, speed: 3.5, dmg: 8, range: 1.75, score: 100, scale: 1 },
+  runner: { hp: 51, speed: 5.7, dmg: 6, range: 1.55, score: 150, scale: 0.88 },
+  brute: { hp: 405, speed: 2.35, dmg: 22, range: 2.35, score: 400, scale: 1.45 },
 };
 
 const FLASH_WHITE = new THREE.Color("#ffffff");
@@ -275,6 +275,9 @@ export class FoundryGame {
     laser: false,
     light: false,
   }));
+  /* cached short-tags of the current gun's mods, rebuilt only on change */
+  private modsCache: string[] = [];
+  private modsCacheKey = "";
   private bobT = 0;
   private bobY = 0;
   private trauma = 0;
@@ -2660,6 +2663,12 @@ export class FoundryGame {
 
     /* ---------- HUD ---------- */
     const alive = this.enemies.filter((e) => e.state !== "dead").length + this.spawnQueue.length;
+    const gm = this.gunMods[this.weaponIdx];
+    const modKey = `${this.weaponIdx}|${gm.suppressor ? 1 : 0}${gm.brake ? 1 : 0}${gm.mag ? 1 : 0}${gm.laser ? 1 : 0}${gm.light ? 1 : 0}`;
+    if (modKey !== this.modsCacheKey) {
+      this.modsCacheKey = modKey;
+      this.modsCache = GUN_MODS.filter((m) => gm[m.id]).map((m) => m.short);
+    }
     this.onHud({
       hp: Math.ceil(this.hp),
       maxHp: this.maxHp,
@@ -2670,6 +2679,7 @@ export class FoundryGame {
       ammoLine: `${WEAPON_AMMO[this.weaponIdx].designation} · ${Math.round(
         muzzleVelocity(WEAPON_AMMO[this.weaponIdx], w.barrelIn)
       ).toLocaleString("en-US")} FPS · ${w.barrelIn}" BBL`,
+      mods: this.modsCache,
       wave: this.wave,
       score: this.score,
       kills: this.kills,

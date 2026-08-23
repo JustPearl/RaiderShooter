@@ -59,6 +59,7 @@ export default function App() {
   const ammoText = useRef<HTMLSpanElement>(null);
   const reserveText = useRef<HTMLSpanElement>(null);
   const ammoLineText = useRef<HTMLDivElement>(null);
+  const modsText = useRef<HTMLDivElement>(null);
   const weaponName = useRef<HTMLDivElement>(null);
   const waveText = useRef<HTMLSpanElement>(null);
   const scoreText = useRef<HTMLSpanElement>(null);
@@ -173,6 +174,11 @@ export default function App() {
       }
       if (reserveText.current) reserveText.current.textContent = h.reserve < 0 ? "∞" : String(h.reserve);
       if (ammoLineText.current) ammoLineText.current.textContent = h.ammoLine;
+      if (modsText.current) {
+        const mt = h.mods.length ? h.mods.join(" · ") : "";
+        if (modsText.current.textContent !== mt) modsText.current.textContent = mt;
+        modsText.current.style.opacity = mt ? "1" : "0";
+      }
       if (weaponName.current) weaponName.current.textContent = h.weaponName;
       if (waveText.current) waveText.current.textContent = String(Math.max(1, h.wave)).padStart(2, "0");
       if (scoreText.current) scoreText.current.textContent = String(h.score).padStart(6, "0");
@@ -413,6 +419,13 @@ export default function App() {
               </div>
               <div ref={ammoLineText} className="mt-0.5 text-[9.5px] font-semibold tracking-[0.14em] text-[#8a7f6c]">
                 .45 ACP · 831 FPS · 5.1" BBL
+              </div>
+              <div
+                ref={modsText}
+                className="mt-1 text-[9px] font-bold tracking-[0.28em] text-[#ffb42e]"
+                style={{ opacity: 0, transition: "opacity 0.2s ease", textShadow: "0 0 10px rgba(255,180,46,0.4)" }}
+              >
+                &nbsp;
               </div>
               <div className="flex items-baseline justify-end gap-2">
                 <span ref={ammoText} className="font-display text-5xl leading-none text-[#ffe8c8] hud-shadow">
@@ -744,7 +757,23 @@ export default function App() {
                       <div className="font-display text-[22px] leading-tight text-[#ffe8c8] group-hover:text-white" style={{ textShadow: `0 0 18px ${rc}55` }}>
                         {c.name}
                       </div>
-                      <p className="mt-2.5 min-h-[54px] text-[12.5px] leading-snug text-[#cdbfa8]">{c.desc}</p>
+                      <p className="mt-2.5 text-[12.5px] leading-snug text-[#cdbfa8]">{c.desc}</p>
+                      {(c.pros || c.cons) && (
+                        <div className="mt-3 space-y-1 border-l-2 border-[rgba(255,107,26,0.3)] pl-2.5">
+                          {(c.pros ?? []).map((p, pi) => (
+                            <div key={`p${pi}`} className="flex items-start gap-1.5 text-[11px] font-semibold leading-snug text-[#7dff5e]">
+                              <span className="mt-[1px]">▲</span>
+                              <span>{p}</span>
+                            </div>
+                          ))}
+                          {(c.cons ?? []).map((co, ci) => (
+                            <div key={`c${ci}`} className="flex items-start gap-1.5 text-[11px] font-semibold leading-snug text-[#ff5a4e]">
+                              <span className="mt-[1px]">▼</span>
+                              <span>{co}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <div className="mt-4 flex items-center justify-between border-t border-[rgba(184,168,143,0.18)] pt-3.5">
                         <div className="flex gap-1.5">
                           {Array.from({ length: c.maxLevel }).map((_, p) => (
