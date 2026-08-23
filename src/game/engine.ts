@@ -238,11 +238,11 @@ const SKILLS: SkillDef[] = [
 const ENEMY_DEFS: Record<EnemyKind, { hp: number; speed: number; dmg: number; range: number; score: number; scale: number }> = {
   /* gunmen: hold mid range, strafe, and fire in staggered bursts —
      their bullets hurt a little less and fly a little slower than fear suggests */
-  scrapper: { hp: 60, speed: 3.2, dmg: 6, range: 8, score: 100, scale: 1 },
+  scrapper: { hp: 90, speed: 3.2, dmg: 6, range: 8, score: 100, scale: 1 },
   /* sprinters: quick, but a determined sprint (8.4) leaves them behind */
-  runner: { hp: 34, speed: 6.3, dmg: 5, range: 1.55, score: 150, scale: 0.88 },
+  runner: { hp: 51, speed: 6.3, dmg: 5, range: 1.55, score: 150, scale: 0.88 },
   /* heavies: wide cleaving swings, shockwaves — threatening, not bulletproof */
-  brute: { hp: 250, speed: 2.2, dmg: 22, range: 2.7, score: 400, scale: 1.45 },
+  brute: { hp: 405, speed: 2.2, dmg: 22, range: 2.7, score: 400, scale: 1.45 },
 };
 
 const FLASH_WHITE = new THREE.Color("#ffffff");
