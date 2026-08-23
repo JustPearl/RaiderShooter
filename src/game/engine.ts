@@ -124,6 +124,9 @@ interface Enemy {
   chargeDirZ: number;
   chargeLocked: boolean;
   enraged: boolean;
+  /* scrapper burst fire */
+  burst: number;
+  burstT: number;
 }
 
 interface Barrel {
@@ -219,9 +222,12 @@ const SKILLS: SkillDef[] = [
 ];
 
 const ENEMY_DEFS: Record<EnemyKind, { hp: number; speed: number; dmg: number; range: number; score: number; scale: number }> = {
-  scrapper: { hp: 90, speed: 3.5, dmg: 8, range: 1.75, score: 100, scale: 1 },
-  runner: { hp: 51, speed: 5.7, dmg: 6, range: 1.55, score: 150, scale: 0.88 },
-  brute: { hp: 405, speed: 2.35, dmg: 22, range: 2.35, score: 400, scale: 1.45 },
+  /* gunmen: hold mid range, strafe, and fire in staggered bursts */
+  scrapper: { hp: 90, speed: 3.5, dmg: 8, range: 8.5, score: 100, scale: 1 },
+  /* sprinters: faster than ever, and they close instead of circling */
+  runner: { hp: 51, speed: 7.3, dmg: 6, range: 1.55, score: 150, scale: 0.88 },
+  /* heavies: wide cleaving swings, shockwaves, real threat pressure */
+  brute: { hp: 405, speed: 2.35, dmg: 30, range: 2.7, score: 400, scale: 1.45 },
 };
 
 const FLASH_WHITE = new THREE.Color("#ffffff");
@@ -3034,6 +3040,7 @@ export class FoundryGame {
       feint: e.feintT > 0 ? Math.sin((1 - e.feintT / 0.22) * Math.PI) : 0,
       dodgeLean: e.dodgeT > 0 ? e.dodgeDir * Math.min(1, e.dodgeT / 0.18) : 0,
       windupMul: Math.max(0.72, 1 - (this.wave - 1) * 0.018),
+      ranged: e.kind === "scrapper",
     });
   }
 

@@ -256,6 +256,15 @@ export class SFX {
     this.noise(0.06, { type: "lowpass", freq: sprint ? 560 : 400, gain: sprint ? 0.12 : 0.085 });
   }
 
+  /* raider scrap pistol — a thin, ragged crack from downrange,
+     deliberately smaller and harsher than the player's sidearm */
+  raiderShot() {
+    this.noise(0.045, { hp: 420, freq: 2600 * this.j(1), q: 0.8, gain: this.j(0.2) });
+    this.noise(0.08, { hp: 260, freq: 900 * this.j(1), q: 0.9, gain: this.j(0.15) });
+    this.tone(0.05, { type: "triangle", freq: 210 * this.j(1), slideTo: 80, gain: this.j(0.11) });
+    this.noise(0.03, { type: "bandpass", freq: 2400 * this.j(1), q: 5, gain: 0.05, delay: 0.04 });
+  }
+
   swing() {
     this.noise(0.12, { type: "bandpass", freq: 700, slideTo: 2200, q: 2, gain: 0.14 });
   }
