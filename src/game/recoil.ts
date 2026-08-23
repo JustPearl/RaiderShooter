@@ -40,6 +40,9 @@ export interface RecoilSpec {
   /* shooter-stance coupling (calibrated per gun to a target peak) */
   stanceRot: number;
   stancePush: number;
+  /** how much ADS bracing soaks the impulse, 0–1 — a shoulder-welded gun
+      (LMG) is braced hard; a free-recoiling pistol barely is */
+  adsBrace: number;
 
   /* secondary axes couple linearly with the gun's recoil velocity J/M */
   yawC: number;
@@ -97,6 +100,7 @@ export const RECOIL_SPECS: RecoilSpec[] = [
        springs land on the exact same peaks as the old tuning */
     stanceRot: 0.866,
     stancePush: 8.83,
+    adsBrace: 0.35,
     yawC: 0.0297,
     rollC: 0.1099,
     driftC: 0.0000184,
@@ -134,6 +138,7 @@ export const RECOIL_SPECS: RecoilSpec[] = [
     /* re-normalized for the slow heavily-damped springs */
     stanceRot: 3.335,
     stancePush: 3.851,
+    adsBrace: 0.5,
     yawC: 0.0828,
     rollC: 0.2329,
     driftC: 0.0000523,
@@ -173,6 +178,7 @@ export const RECOIL_SPECS: RecoilSpec[] = [
     /* re-normalized for the snappy light springs */
     stanceRot: 3.105,
     stancePush: 21.78,
+    adsBrace: 0.35,
     yawC: 0.1018,
     rollC: 0.3486,
     driftC: 0.0000444,
@@ -208,11 +214,14 @@ export const RECOIL_SPECS: RecoilSpec[] = [
     climbFactor: 0.15,
     pushFactor: 0.95,
     /* targets: 1.7° climb, 0.21 shove, ±0.005 yaw snap, ±0.025 roll, ±0.002 drift, 0.02 dip */
-    /* re-normalized for the near-critically-damped heave */
-    stanceRot: 24.63,
+    /* re-normalized for the near-critically-damped heave. Climb halved and
+       burst recovery sped up so a braced ADS burst stays on target instead
+       of riding up and stacking. */
+    stanceRot: 13.0,
     stancePush: 15.61,
+    adsBrace: 0.62,
     yawC: 0.1458,
-    rollC: 0.5312,
+    rollC: 0.32,
     driftC: 0.0000875,
     dropC: 0.3314,
     traumaGain: 0.12,
@@ -225,10 +234,10 @@ export const RECOIL_SPECS: RecoilSpec[] = [
     pushZeta: 0.95,
     swayStiff: 42,
     swayDamp: 20,
-    gasT: 0.08,
+    gasT: 0.06,
     gasSplit: 0.4,
-    twistK: 1.0,
-    burstRecovery: 3.2,
+    twistK: 0.7,
+    burstRecovery: 5.5,
     holdSway: 0.4,
     /* bedded into the shoulder with a cheek weld — energy goes straight
        back into the body, the muzzle barely levers up */
@@ -313,8 +322,9 @@ export class RecoilRig {
    */
   fire(spec: RecoilSpec, aimAmt: number): number {
     this.variance = 0.85 + Math.random() * 0.6;
-    /* bracing: a braced weld soaks impulse before it moves anything */
-    const braced = 1 - 0.35 * aimAmt;
+    /* bracing: a shoulder-welded gun (LMG) soaks far more impulse when
+       aimed than a free-recoiling pistol does */
+    const braced = 1 - spec.adsBrace * aimAmt;
     /* burst heat — the more you pour in, the harder each round climbs */
     this.burst = Math.min(1, this.burst + 0.3 * this.variance * braced);
     const J = spec.impulseNs * this.variance * braced * (1 + 0.9 * this.burst);
@@ -357,8 +367,11 @@ export class RecoilRig {
     const vGun = J / M;
     const brace2 = 1 - 0.5 * aimAmt;
     const tw = spec.twistK;
+    /* yaw/drift carry the rifling "walk" bias (a rifle pulls one way);
+       roll is kept symmetric — twist torques the bullet, not a sustained
+       barrel roll, so no bias here or heavy guns lean permanently */
     this.yawV += ((Math.random() - 0.5) * 2 * 0.6 + tw * 0.5) * vGun * spec.yawC * 8 * brace2 * k;
-    this.rollV += ((Math.random() - 0.5) * 2 * 0.45 + tw * 0.65) * vGun * spec.rollC * 8 * brace2 * k;
+    this.rollV += (Math.random() - 0.5) * 2 * 0.45 * vGun * spec.rollC * 8 * brace2 * k;
     this.gasYaw += tw * 0.25 * vGun * spec.yawC * 8 * brace2 * k;
     this.dropV += vGun * spec.dropC * 4 * braced * k * (1 + 0.5 * this.burst);
 

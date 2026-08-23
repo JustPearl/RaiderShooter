@@ -2133,9 +2133,10 @@ export class FoundryGame {
     /* recoil rig — every axis is an under-damped spring settling to rest */
     this.rig.update(dt, this.rigSpec, this.aimAmt);
     /* a braced gun fights the kick: the sight picture tracks the target
-       tighter by partially cancelling the snap while aimed */
+       tighter by partially cancelling the snap while aimed — a shoulder
+       weld (high adsBrace) holds the picture down hardest */
     this.aimYaw = -this.rig.camYaw * this.aimAmt * 0.8;
-    this.aimPitch = -this.rig.camPitch * this.aimAmt * 0.35;
+    this.aimPitch = -this.rig.camPitch * this.aimAmt * (0.35 + 0.4 * this.rigSpec.adsBrace);
     this.fovKick *= Math.exp(-8 * dt);
     if (this.gunLight) this.gunLight.intensity = Math.max(1.1, this.gunLight.intensity * Math.exp(-16 * dt));
     this.comboT -= dt;
