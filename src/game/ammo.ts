@@ -8,6 +8,13 @@
    barrel, scaled by the kinetic-energy ratio (E ∝ v²) at the
    length of barrel actually fitted to the gun. Longer barrel,
    more complete powder burn, more speed, more damage.
+
+   Base damage follows real muzzle energy on a FLATTENED curve —
+   the fourth root (E^0.25) — so the ordering and direction of
+   real ballistics are preserved while arcade numbers stay sane:
+   the 7.62's raw ~9.4× energy advantage over the .45 lands at
+   ~1.8× in-game. No projectile one-shots anything; the rifle's
+   edge is per-shot punch within a sustainable burst, not instakill.
    ============================================================ */
 
 export type AmmoId = "acp45" | "para9" | "buck12" | "nato762";
@@ -40,10 +47,6 @@ export interface AmmoSpec {
   note: string;
 }
 
-/* Damage sits on a flattened E^0.25 curve of real muzzle energy: the
-   ordering and direction match real ballistics, but the rifle's raw
-   9.4× advantage compresses to ~1.8× so nothing one-shots anything. */
-
 export const AMMO: Record<AmmoId, AmmoSpec> = {
   acp45: {
     id: "acp45",
@@ -53,8 +56,8 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     referenceBarrelIn: 5.0,
     velGainPerIn: 12, /* fast-burning pistol powder — little left to give */
     energyJ: 350,
-    /* the WEAKEST projectile here — 350 J next to the rifle's 3304 J.
-       Its advantage is the infinite reserve, not the punch. */
+    /* 350 J — the weakest projectile on the curve, as reality dictates.
+       Its trade is a bottomless reserve: volume over punch. */
     baseDamage: 18,
     knockback: 1.6,
     ragdollForce: 6,
@@ -70,7 +73,8 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     referenceBarrelIn: 4.7, /* SAAMI reference barrel */
     velGainPerIn: 26,
     energyJ: 519,
-    /* 519 J — ~1.1× the .45 per projectile; its edge is rate of fire */
+    /* 519 J — a touch above the .45 per projectile. Its real edge is
+       rate of fire and a long barrel that wrings +26 fps per inch. */
     baseDamage: 20,
     knockback: 1.2,
     ragdollForce: 5,
@@ -86,7 +90,8 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     referenceBarrelIn: 18.0,
     velGainPerIn: 20,
     energyJ: 310, /* per pellet */
-    /* 310 J per pellet — nine of them is what makes it hurt */
+    /* 310 J per pellet — under the .45 per shot, matching real energy.
+       Eight of them landing at once is what makes it hurt. */
     baseDamage: 17,
     knockback: 2.5, /* per pellet — eight hits stack into a real shove */
     ragdollForce: 4,
@@ -102,10 +107,10 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     referenceBarrelIn: 20.0, /* M80 ball, 20" test barrel */
     velGainPerIn: 40, /* slow rifle powder — long barrels earn real speed */
     energyJ: 3304,
-    /* 3304 J — hardest-hitting projectile (~1.8× the .45 on the flat
-       curve, not the raw 9.4×): a burst shreds but never one-shots a
-       runner. Its real costs are the 120-rd reserve, 2.6s belt swap
-       and 85% move speed. Also the rarest drop. */
+    /* 3304 J — still the hardest-hitting projectile (~1.8× the .45 on the
+       flattened fourth-root curve, not the raw 9.4×). Strong enough that a
+       burst shreds, never enough to one-shot. Its real costs are the
+       scarce reserve, the 2.6s belt swap and 85% move speed. */
     baseDamage: 32,
     knockback: 5.0,
     ragdollForce: 16,
