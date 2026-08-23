@@ -304,6 +304,9 @@ export class FoundryGame {
   private mouseDX = 0;
   private mouseDY = 0;
   private lookSens = 1;
+  /* input coalescing — wheel and swap spam get throttled to deliberate steps */
+  private lastWheelT = 0;
+  private lastSwitchT = 0;
 
   /* options-menu mouse sensitivity multiplier */
   setSensitivity(v: number) {
@@ -551,7 +554,8 @@ export class FoundryGame {
   /* ============================== Input ============================== */
 
   private onKeyDown = (e: KeyboardEvent) => {
-    if (["Space", "ArrowUp", "ArrowDown", "KeyW", "KeyA", "KeyS", "KeyD"].includes(e.code)) e.preventDefault();
+    if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "KeyW", "KeyA", "KeyS", "KeyD", "Tab"].includes(e.code))
+      e.preventDefault();
     if (e.repeat) return;
     this.keys.add(e.code);
     if (this.phase !== "playing") return;
@@ -562,24 +566,56 @@ export class FoundryGame {
     if (e.code === "KeyR") this.startReload();
   };
   private onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.code);
+  /* losing focus mid-combat must never leave a key or button stuck */
+  private onBlur = () => {
+    this.sanitizeInput();
+    if (this.phase === "playing") {
+      try {
+        document.exitPointerLock(); /* routes through onLockChange → paused */
+      } catch {
+        /* already unlocked */
+      }
+    }
+  };
+  private sanitizeInput() {
+    this.keys.clear();
+    this.firing = false;
+    this.aiming = false;
+    this.mouseDX = 0;
+    this.mouseDY = 0;
+  }
   private onMouseMove = (e: MouseEvent) => {
     if (document.pointerLockElement === this.canvas) {
-      this.mouseDX += e.movementX;
-      this.mouseDY += e.movementY;
+      /* clamp single-event deltas — the first event after a re-lock can
+         carry a huge spike that would otherwise spin the view 180° */
+      this.mouseDX += Math.max(-75, Math.min(75, e.movementX));
+      this.mouseDY += Math.max(-75, Math.min(75, e.movementY));
     }
   };
   private onMouseDown = (e: MouseEvent) => {
-    if (e.button === 0) this.firing = true;
-    if (e.button === 2) this.aiming = true;
-    /* safety: a click while un-locked re-engages the pointer lock */
-    if (this.phase === "playing" && document.pointerLockElement !== this.canvas) this.lockPointer();
+    if (e.button === 1) e.preventDefault(); /* no middle-click autoscroll */
+    const locked = document.pointerLockElement === this.canvas;
+    if (this.phase === "playing" && locked) {
+      /* buttons only arm while actually in control of the gun */
+      if (e.button === 0) this.firing = true;
+      if (e.button === 2) this.aiming = true;
+    } else if (this.phase === "playing" && !locked) {
+      /* safety: a click while un-locked re-engages the pointer lock */
+      this.lockPointer();
+    }
   };
   private onMouseUp = (e: MouseEvent) => {
     if (e.button === 0) this.firing = false;
     if (e.button === 2) this.aiming = false;
   };
-  private onWheel = (e: WheelEvent) => {
-    if (this.phase === "playing") this.switchTo((this.weaponIdx + 1) % WEAPONS.length);
+  private onWheel = () => {
+    if (this.phase !== "playing") return;
+    /* one deliberate step per notch — a fast flick must not cycle the
+       whole arsenal through a flurry of swap animations */
+    const now = performance.now();
+    if (now - this.lastWheelT < 150) return;
+    this.lastWheelT = now;
+    this.switchTo((this.weaponIdx + 1) % WEAPONS.length);
   };
   private onCtx = (e: Event) => e.preventDefault();
   private onDocCtx = (e: Event) => e.preventDefault();
@@ -590,6 +626,9 @@ export class FoundryGame {
         this.onEvent({ type: "playing" });
       }
     } else if (this.phase === "playing") {
+      /* dropped the lock (Esc, Alt+Tab, another window) — park every input
+         so nothing is still held when play resumes */
+      this.sanitizeInput();
       this.phase = "paused";
       this.onEvent({ type: "paused" });
     }
@@ -598,6 +637,7 @@ export class FoundryGame {
   private bindInput() {
     window.addEventListener("keydown", this.onKeyDown);
     window.addEventListener("keyup", this.onKeyUp);
+    window.addEventListener("blur", this.onBlur);
     document.addEventListener("mousemove", this.onMouseMove);
     document.addEventListener("mousedown", this.onMouseDown);
     document.addEventListener("mouseup", this.onMouseUp);
@@ -609,6 +649,7 @@ export class FoundryGame {
   private unbindInput() {
     window.removeEventListener("keydown", this.onKeyDown);
     window.removeEventListener("keyup", this.onKeyUp);
+    window.removeEventListener("blur", this.onBlur);
     document.removeEventListener("mousemove", this.onMouseMove);
     document.removeEventListener("mousedown", this.onMouseDown);
     document.removeEventListener("mouseup", this.onMouseUp);
@@ -632,11 +673,14 @@ export class FoundryGame {
   start() {
     sfx.ensure();
     this.resetRun();
+    /* a button click that started the run must not also arm the trigger */
+    this.sanitizeInput();
     this.lockPointer();
   }
 
   resume() {
     sfx.ensure();
+    this.sanitizeInput();
     this.lockPointer();
   }
 
@@ -1895,6 +1939,10 @@ export class FoundryGame {
 
   private switchTo(idx: number) {
     if (idx === this.weaponIdx || this.wState === "lowering" || this.wState === "raising") return;
+    /* key-mashing or wheel spam gets coalesced into one swap per beat */
+    const now = performance.now();
+    if (now - this.lastSwitchT < 120) return;
+    this.lastSwitchT = now;
     this.pendingWeapon = idx;
     this.wState = "lowering";
     this.wT = 0.16;
