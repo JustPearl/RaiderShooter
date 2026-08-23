@@ -253,7 +253,7 @@ export const RECOIL_SPECS: RecoilSpec[] = [
     gasSplit: 0.4,
     twistK: 0.7,
     burstRecovery: 5.5,
-    holdSway: 0.4,
+    holdSway: 1.1,
     /* bedded into the shoulder with a cheek weld — energy goes straight
        back into the body, the muzzle barely levers up */
     contacts: [

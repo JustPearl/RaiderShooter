@@ -628,7 +628,7 @@ export default function App() {
                       <rect x="8" y="9" width="6" height="8" fill="#8a7f6c" />
                     </svg>
                     <p className="text-[#cdbfa8]">
-                      <span className="font-bold text-[#ffe8c8]">P-9 SCRAPLOCK</span> — the sidearm that never runs dry. Tightest aim and steady damage; your anchor when the crates go quiet.
+                      <span className="font-bold text-[#ffe8c8]">P-9 SCRAPLOCK</span> — the stable anchor. Fires true on the move, snaps to sights instantly, barely blooms. Less damage, but nearly every shot lands.
                     </p>
                   </div>
                   <div className="flex items-start gap-3">
@@ -637,7 +637,7 @@ export default function App() {
                       <rect x="18" y="10" width="11" height="5" fill="#8a5a3c" />
                     </svg>
                     <p className="text-[#cdbfa8]">
-                      <span className="font-bold text-[#ffe8c8]">M870 BREAKER</span> — 8-pellet scattergun. Point-blank it erases a raider and breaks their swing mid-windup. Shells are scarce; make them count.
+                      <span className="font-bold text-[#ffe8c8]">M870 BREAKER</span> — huge burst damage up close, but a wide cone that's slow to aim and scatters if you fire on the move. Pay for it with positioning and timing.
                     </p>
                   </div>
                   <div className="flex items-start gap-3">
@@ -647,7 +647,7 @@ export default function App() {
                       <rect x="12" y="10" width="5" height="8" fill="#4a4d52" />
                     </svg>
                     <p className="text-[#cdbfa8]">
-                      <span className="font-bold text-[#ffe8c8]">VK-9 WESPE</span> — full-auto SMG, the hottest trigger in the rack. Bursts of 5–8 stay on target; hold the mouse down and it climbs, blooms, and eats the crate.
+                      <span className="font-bold text-[#ffe8c8]">VK-9 WESPE</span> — the middle of the scale. Quick to shoulder, but it drifts more than the sidearm and heats up fast. Bursts stay tight; dumping the mag doesn't.
                     </p>
                   </div>
                   <div className="flex items-start gap-3">
@@ -659,7 +659,7 @@ export default function App() {
                       <rect x="15" y="4" width="2" height="2" fill="#b8a88f" />
                     </svg>
                     <p className="text-[#cdbfa8]">
-                      <span className="font-bold text-[#ffe8c8]">MG-7 HOG</span> — a 60-round hose for crowd control, but no stronger per second than the SMG. Lugs at 85% speed, re-belts for 2.6s, belts are rare.
+                      <span className="font-bold text-[#ffe8c8]">MG-7 HOG</span> — the most damage per second, and the hardest to land. Wanders at rest, lurches on a flick, blooms under full-auto, hates movement, slow to shoulder. Plant, brace, burst — or waste the belt.
                     </p>
                   </div>
                   <div className="flex items-start gap-3">

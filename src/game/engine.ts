@@ -183,6 +183,26 @@ interface WeaponDef {
   tracer: string;
   /** how hard a kill throws the ragdoll */
   ragdoll: number;
+
+  /* ---- handling profile: this is what balances the guns, not damage ----
+     Damage is fixed per gun. These stats decide what fraction of your
+     shots actually LAND, so a heavy gun only out-damages a light one if
+     you commit to it (brace, burst, stand still). High damage is bought
+     with instability, never handed out free. */
+  /** idle wander of the viewmodel — how much the gun drifts in your hands */
+  swayAmp: number;
+  /** how much aiming calms the sway, 0–1 — a braced gun settles, a hog doesn't */
+  swaySettle: number;
+  /** seconds to reach full aim-down-sights */
+  adsTime: number;
+  /** barrel heat added per shot — sustained fire blooms the cone */
+  bloomRate: number;
+  /** heat shed per second — how fast the barrel cools */
+  bloomRecover: number;
+  /** cone added per unit of movement speed — punishes run-and-gun */
+  moveSpread: number;
+  /** cone added per shot that decays — full-auto compounds this fast */
+  spreadKick: number;
 }
 
 /* ============================== Engine ============================== */
@@ -198,23 +218,25 @@ const ARENA = 31;
 const UP = new THREE.Vector3(0, 1, 0);
 const TRACER_SPEED = 340; /* world units/sec the streak head travels */
 
-/* Balance contract — every gun lands in the same ~170–190 sustained-DPS
-   band, and each one pays for its niche so no weapon is the obvious answer:
-   · P-9   26 dmg × 6.45 rps ≈ 168 — precision + infinite supply, lowest DPS
-   · M870  14 × 8 pellets ≈ 112/blast — close-range delete + parry, ammo-starved
-   · VK-9  15 dmg × 12.2 rps ≈ 183 — hottest trigger, worst bloom, eats supply
-   · MG-7  22 dmg × 8.5 rps ≈ 187 — a 60-round hose, but it lugs at 85% speed,
-           takes 2.6s to re-belt, blooms badly and can't break an attack */
+/* Balance contract — damage is fixed; HANDLING is the currency. Each gun's
+   effective DPS = dmg × rate × hit-rate, and hit-rate is set by the handling
+   profile below. So the choice is never "which does more damage" but
+   "how much instability am I willing to manage for the damage I want":
+   · P-9   26 dmg — the stable anchor. Barely blooms, snaps to ADS instantly,
+           fires true on the move. Lower DPS, but nearly every shot lands.
+   · M870  14 × 8 — huge burst damage up close, but a wide cone, slow to aim,
+           and moving shots scatter. Pay for it with positioning + timing.
+   · VK-9  15 dmg — middling. Quick to aim, but sustained fire heats fast and
+           it drifts more than the sidearm. Bursts stay tight, dumps don't.
+   · MG-7  22 dmg — the most damage per second on paper, and the hardest to
+           land. Wanders at rest, lurches when you flick, blooms hard under
+           full-auto, punishes movement, and takes forever to shoulder. You
+           only get its DPS if you plant, brace, and fire in bursts. */
 const WEAPONS: WeaponDef[] = [
-  { name: "P-9 SCRAPLOCK", tag: "P-9", dmg: 26, ammoName: "PISTOL ROUNDS", pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2, bloom: 0.052, moveMul: 1, knock: 1.6, flash: 0.62, tracer: "#ffe8b0", ragdoll: 5.5 },
-  { name: "M870 BREAKER", tag: "BREAKER", dmg: 14, ammoName: "SHOTGUN SHELLS", pellets: 8, spread: 0.055, kick: 0.06, cooldown: 0.82, magSize: 6, reloadTime: 0.5, auto: false, fovPunch: 5, bloom: 0.02, moveMul: 1, knock: 6.5, flash: 1.0, tracer: "#ffc37e", ragdoll: 11 },
-  /* full-auto volume at the price of supply, a long mag swap and the
-     worst heat bloom in the rack */
-  { name: "VK-9 WESPE", tag: "VK-9", dmg: 15, ammoName: "SMG ROUNDS", pellets: 1, spread: 0.013, kick: 0.0075, cooldown: 0.082, magSize: 24, reloadTime: 1.4, auto: true, fovPunch: 0.5, bloom: 0.09, moveMul: 1, knock: 1.0, flash: 0.46, tracer: "#ffe08f", ragdoll: 4.2 },
-  /* the hose: sustained suppressive fire and a heavy shove — paid for with
-     a slow crawl, the longest reload, scarce belts, heavy climb and a
-     projectile too light to stagger an attack mid-swing */
-  { name: "MG-7 HOG", tag: "MG-7", dmg: 22, ammoName: "LMG BELT", pellets: 1, spread: 0.02, kick: 0.02, cooldown: 0.118, magSize: 60, reloadTime: 2.6, auto: true, fovPunch: 1.0, bloom: 0.085, moveMul: 0.85, knock: 3.0, flash: 0.8, tracer: "#ffb45e", ragdoll: 8 },
+  { name: "P-9 SCRAPLOCK", tag: "P-9", dmg: 26, ammoName: "PISTOL ROUNDS", pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2, bloom: 0.052, moveMul: 1, knock: 1.6, flash: 0.62, tracer: "#ffe8b0", ragdoll: 5.5, swayAmp: 0.5, swaySettle: 1.0, adsTime: 0.16, bloomRate: 0.36, bloomRecover: 1.0, moveSpread: 0.0028, spreadKick: 0.005 },
+  { name: "M870 BREAKER", tag: "BREAKER", dmg: 14, ammoName: "SHOTGUN SHELLS", pellets: 8, spread: 0.055, kick: 0.06, cooldown: 0.82, magSize: 6, reloadTime: 0.5, auto: false, fovPunch: 5, bloom: 0.02, moveMul: 1, knock: 6.5, flash: 1.0, tracer: "#ffc37e", ragdoll: 11, swayAmp: 0.65, swaySettle: 0.8, adsTime: 0.30, bloomRate: 0.10, bloomRecover: 0.9, moveSpread: 0.010, spreadKick: 0.030 },
+  { name: "VK-9 WESPE", tag: "VK-9", dmg: 15, ammoName: "SMG ROUNDS", pellets: 1, spread: 0.013, kick: 0.0075, cooldown: 0.082, magSize: 24, reloadTime: 1.4, auto: true, fovPunch: 0.5, bloom: 0.09, moveMul: 1, knock: 1.0, flash: 0.46, tracer: "#ffe08f", ragdoll: 4.2, swayAmp: 0.8, swaySettle: 0.7, adsTime: 0.22, bloomRate: 0.45, bloomRecover: 0.7, moveSpread: 0.005, spreadKick: 0.010 },
+  { name: "MG-7 HOG", tag: "MG-7", dmg: 22, ammoName: "LMG BELT", pellets: 1, spread: 0.03, kick: 0.02, cooldown: 0.118, magSize: 60, reloadTime: 2.6, auto: true, fovPunch: 1.0, bloom: 0.085, moveMul: 0.85, knock: 3.0, flash: 0.8, tracer: "#ffb45e", ragdoll: 8, swayAmp: 2.2, swaySettle: 0.28, adsTime: 0.55, bloomRate: 0.10, bloomRecover: 0.35, moveSpread: 0.018, spreadKick: 0.020 },
 ];
 
 /* ============================== Skill pool ============================== */
@@ -406,6 +428,8 @@ export class FoundryGame {
   private pendingWeapon = 0;
   private shellT = 0;
   private heat = 0;
+  /** per-shot cone penalty that decays — full-auto guns stack this quickly */
+  private kickSpread = 0;
   private vmGroups: THREE.Group[] = [];
   private vmMuzzles: THREE.Object3D[] = [];
   private vmBase = new THREE.Vector3(0.3, -0.28, -0.55);
@@ -750,6 +774,7 @@ export class FoundryGame {
     this.wState = "idle";
     this.fireCd = 0;
     this.heat = 0;
+    this.kickSpread = 0;
     this.wave = 0;
     this.score = 0;
     this.kills = 0;
@@ -2112,12 +2137,15 @@ export class FoundryGame {
 
   private currentSpread(): number {
     const w = WEAPONS[this.weaponIdx];
-    /* quadratic heat bloom — trigger discipline keeps it tight,
-       dumping the mag from the hip opens the cone wide */
+    /* barrel heat — sustained fire blooms the cone; aim suppresses most of it */
     const bloom = this.heat * this.heat * w.bloom * this.modBloomMul();
     const base = w.spread * (1 - 0.45 * this.aimAmt) * this.modSpreadMul();
     const speed = Math.hypot(this.vel.x, this.vel.z);
-    let s = base + bloom * (1 - 0.85 * this.aimAmt) + speed * 0.0035;
+    /* movement penalty is per-weapon: a sidearm fires true on the move,
+       a hog's shots go wide the moment you take a step */
+    let s = base + bloom * (1 - 0.85 * this.aimAmt) + speed * w.moveSpread;
+    /* per-shot kick cone — full-auto stacks this; it decays between bursts */
+    s += this.kickSpread * (1 - 0.6 * this.aimAmt);
     if (!this.grounded) s += 0.02 * (1 - 0.5 * this.aimAmt);
     return s;
   }
@@ -2143,8 +2171,11 @@ export class FoundryGame {
     this.mags[this.weaponIdx]--;
     this.fireCd = w.cooldown / this.fireMul;
     this.shotsFired++;
-    /* heavy MG barrel heats slower; SMG runs hottest per second */
-    this.heat = Math.min(1, this.heat + (this.weaponIdx === 0 ? 0.36 : this.weaponIdx === 3 ? 0.22 : 0.5));
+    /* handling cost of pulling the trigger: barrel heat + a decaying kick cone.
+       Full-auto guns pay both every shot, so holding the mouse down widens
+       the cone until only bursts are accurate. */
+    this.heat = Math.min(1, this.heat + w.bloomRate);
+    this.kickSpread = Math.min(0.06, this.kickSpread + w.spreadKick);
     /* ---- data-driven recoil (see recoil.ts): the gun's caliber, mass,
        bore height and body contact points solve the impulse — climb torque
        J·h/I, shoulder shove J/M, yaw/roll/drift from the gun's recoil
@@ -2662,7 +2693,9 @@ export class FoundryGame {
 
     /* ---------- weapons ---------- */
     this.fireCd -= dt;
-    this.heat = Math.max(0, this.heat - dt * 0.85);
+    this.heat = Math.max(0, this.heat - dt * WEAPONS[this.weaponIdx].bloomRecover);
+    /* the kick cone settles between bursts — fire control is rewarded */
+    this.kickSpread = Math.max(0, this.kickSpread - dt * 0.09);
     /* recoil rig — every axis is an under-damped spring settling to rest */
     this.rig.update(dt, this.rigSpec, this.aimAmt);
     /* the shooter fights the kick while aimed — but only as far as the gun
@@ -2727,7 +2760,10 @@ export class FoundryGame {
 
     /* ---------- aim-down-sights blend ---------- */
     const wantAim = this.aiming && (this.wState === "idle" || this.wState === "reloading") ? 1 : 0;
-    this.aimAmt += (wantAim - this.aimAmt) * Math.min(1, dt * (wantAim ? 12 : 9));
+    /* time-to-aim is per-weapon: a sidearm snaps up, a hog takes a beat to
+       shoulder — so heavy guns can't react-aim, they must be committed */
+    const aimRate = wantAim ? 1 / WEAPONS[this.weaponIdx].adsTime : 9;
+    this.aimAmt += (wantAim - this.aimAmt) * Math.min(1, dt * aimRate);
     const aim = this.aimAmt;
 
     /* ---------- sway spring integration — per-gun: light guns are springy
@@ -2761,6 +2797,10 @@ export class FoundryGame {
     const baseY = this.vmBase.y * (1 - aim) + -0.165 * aim;
     const baseZ = this.vmBase.z * (1 - aim) + -0.34 * aim;
     const idleAmp = 1 - aim * 0.85;
+    /* handling wander — the gun drifts in your hands by its swayAmp, and
+       aiming only calms it by swaySettle. A hog never truly settles, so its
+       model keeps lurching even when braced — the visual echo of its spread. */
+    const sway = w.swayAmp * (1 - aim * 0.85 * w.swaySettle);
     /* recoil rig drives the gun body: shove into the shoulder, muzzle lever,
        horizontal snap and barrel torque — the horizon itself never rolls.
        The gun shows the FULL motion (crack + heave); only the camera is
@@ -2770,12 +2810,12 @@ export class FoundryGame {
     /* human hold-sway — a held gun never sits perfectly still */
     const hsx = this.rig.holdX;
     const hsy = this.rig.holdY;
-    let vy = baseY + this.bobY * 0.6 * idleAmp + Math.sin(this.bobT) * bobAmp * 0.6 * idleAmp - swY * 0.4 - this.rig.drop + hsy * 0.009;
-    let vx = baseX + Math.sin(this.bobT * 0.5) * bobAmp * 0.4 * idleAmp + swX * 0.45 + hsx * 0.012;
-    let vz = baseZ + rigPush + swY * 0.12;
-    let vrx = gunPitch * 2.2 + swY * 1.1 + hsy * 0.02;
-    let vry = -swX * 0.9 + this.rig.yaw * 6 + hsx * 0.022;
-    let vrz = Math.sin(this.bobT) * bobAmp * 0.3 * idleAmp + swX * 0.5 + this.rig.roll * 2.5;
+    let vy = baseY + this.bobY * 0.6 * idleAmp + Math.sin(this.bobT) * bobAmp * 0.6 * idleAmp - swY * 0.4 * sway - this.rig.drop + hsy * 0.009 * sway;
+    let vx = baseX + Math.sin(this.bobT * 0.5) * bobAmp * 0.4 * idleAmp + swX * 0.45 * sway + hsx * 0.012 * sway;
+    let vz = baseZ + rigPush + swY * 0.12 * sway;
+    let vrx = gunPitch * 2.2 + swY * 1.1 * sway + hsy * 0.02 * sway;
+    let vry = -swX * 0.9 * sway + this.rig.yaw * 6 + hsx * 0.022 * sway;
+    let vrz = Math.sin(this.bobT) * bobAmp * 0.3 * idleAmp + swX * 0.5 * sway + this.rig.roll * 2.5;
 
     if (this.wState === "lowering") vy -= 0.35 * (1 - this.wT / 0.16);
     if (this.wState === "raising") vy -= 0.35 * (this.wT / 0.2);
