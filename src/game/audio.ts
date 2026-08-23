@@ -5,6 +5,14 @@ export class SFX {
   private master: GainNode | null = null;
   private noiseBuf: AudioBuffer | null = null;
   private lastStep = 0;
+  private vol = 1;
+
+  /* options-menu volume (0–1); stored before the context exists so the
+     first user gesture applies it */
+  setVolume(v: number) {
+    this.vol = Math.max(0, Math.min(1, v));
+    if (this.master) this.master.gain.value = 0.62 * this.vol;
+  }
 
   ensure() {
     if (!this.ctx) {
@@ -17,7 +25,7 @@ export class SFX {
       comp.attack.value = 0.002;
       comp.release.value = 0.18;
       this.master = this.ctx.createGain();
-      this.master.gain.value = 0.62;
+      this.master.gain.value = 0.62 * this.vol;
       /* tuned for basic speakers: they can't move air below ~50Hz, and that
          rumble only pumps the compressor and steals headroom from everything
          audible — so it gets cut here, before dynamics processing */

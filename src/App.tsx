@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { FoundryGame, type GameEvent, type HudData, type FinalStats, type GamePhase, type SkillCard } from "./game/engine";
 import { sfx } from "./game/audio";
 
@@ -48,8 +48,18 @@ export default function App() {
   const ringWrapRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<SVGCircleElement>(null);
   const pipsRef = useRef<HTMLDivElement>(null);
-  const slotRefs = [useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null)];
+  const slotRefs = [useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null)];
   const lastWeapon = useRef(-1);
+
+  /* ------- options (persisted to localStorage) ------- */
+  const loadOpt = (key: string, def: number, min: number, max: number) => {
+    const v = parseFloat(localStorage.getItem(key) ?? "");
+    return Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : def;
+  };
+  const [brightness, setBrightness] = useState(() => loadOpt("fo-brightness", 1, 0.5, 1.6));
+  const [volume, setVolume] = useState(() => loadOpt("fo-volume", 1, 0, 1));
+  const [sens, setSens] = useState(() => loadOpt("fo-sens", 1, 0.5, 2));
+  const [optOpen, setOptOpen] = useState(false);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -150,7 +160,7 @@ export default function App() {
       if (lastWeapon.current !== h.weapon) {
         lastWeapon.current = h.weapon;
         setWeapon(h.weapon);
-        for (let i = 0; i < 2; i++) {
+        for (let i = 0; i < slotRefs.length; i++) {
           if (slotRefs[i].current) {
             slotRefs[i].current!.style.borderColor = i === h.weapon ? "#ff6b1a" : "rgba(184,168,143,0.25)";
             slotRefs[i].current!.style.color = i === h.weapon ? "#ffb42e" : "rgba(184,168,143,0.45)";

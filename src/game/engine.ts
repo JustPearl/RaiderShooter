@@ -242,6 +242,12 @@ export class FoundryGame {
   private firing = false;
   private mouseDX = 0;
   private mouseDY = 0;
+  private lookSens = 1;
+
+  /* options-menu mouse sensitivity multiplier */
+  setSensitivity(v: number) {
+    this.lookSens = Math.max(0.3, Math.min(2.5, v));
+  }
 
   /* weapons */
   private weaponIdx = 0;
@@ -1768,7 +1774,7 @@ export class FoundryGame {
     this.collideCircle(this.pos, 0.55);
 
     /* mouse look */
-    const sens = 0.0022;
+    const sens = 0.0022 * this.lookSens;
     this.yaw -= this.mouseDX * sens;
     this.pitch -= this.mouseDY * sens;
     this.pitch = Math.max(-1.45, Math.min(1.45, this.pitch));
