@@ -117,7 +117,6 @@ interface Enemy {
   ragdoll: Ragdoll | null;
   /* tactics */
   orbitDir: number;
-  style: "rush" | "flank";
   stuckT: number;
   feintT: number;
   feintCd: number;
@@ -129,6 +128,17 @@ interface Enemy {
   chargeDirZ: number;
   chargeLocked: boolean;
   enraged: boolean;
+  /* squad tactics — per-raider personality so the pack reads as a team,
+     not a swarm: which side it arcs in from, how much space it likes,
+     how eagerly it pushes, and where on the firing arc a gunner stands */
+  flank: number;
+  caution: number;
+  aggression: number;
+  hesitateT: number;
+  hesitateCd: number;
+  laneAngle: number;
+  laneTarget: number;
+  repositionT: number;
   /* scrapper burst fire */
   burst: number;
   burstT: number;
@@ -143,6 +153,19 @@ interface Barrel {
   hp: number;
   fuse: number;
   dead: boolean;
+}
+
+/* one coordinated arrival group within a wave */
+interface SpawnPulse {
+  queue: EnemyKind[];
+  /** which breach gate this element pours through */
+  gate: [number, number];
+  /** seconds until this pulse begins arriving */
+  delay: number;
+  /** seconds between individual raiders in the pulse */
+  interval: number;
+  /** internal spawn timer */
+  t: number;
 }
 
 /* Supply drops are per-weapon. Rarity follows how much damage the gun deals
@@ -521,8 +544,15 @@ export class FoundryGame {
   private comboT = 0;
   private waveMode: "intermission" | "active" = "intermission";
   private waveT = 0;
-  private spawnQueue: EnemyKind[] = [];
+  /* a wave arrives as coordinated pulses (vanguard → gunline → heavies),
+     each from its own gate, instead of one undifferentiated trickle */
+  private spawnPulses: SpawnPulse[] = [];
   private spawnT = 0;
+  /* squad "brain" — cheap per-frame signals that make the three archetypes
+     interlock: are melee in the player's face, are guns suppressing */
+  private squadMeleeEngaged = false;
+  private squadGunnersFiring = 0;
+  private squadBrutesActive = false;
   private playT = 0;
 
   private raycaster = new THREE.Raycaster();
@@ -1807,9 +1837,6 @@ export class FoundryGame {
     /* runners alternate orbit sides to pincer; scrappers grow bolder each wave */
     const orbitDir = kind === "runner" ? -this.lastRunnerDir : Math.random() < 0.5 ? -1 : 1;
     if (kind === "runner") this.lastRunnerDir = orbitDir;
-    const flankChance = Math.min(0.25 + (this.wave - 1) * 0.045, 0.6);
-    const style: "rush" | "flank" =
-      kind === "runner" ? "flank" : kind === "brute" ? "rush" : Math.random() < flankChance ? "flank" : "rush";
 
     const hitData = { kind: "enemy" as const, enemy: null as unknown as Enemy };
     const enemy: Enemy = {
@@ -1835,7 +1862,6 @@ export class FoundryGame {
       mvz: 0,
       ragdoll: null,
       orbitDir,
-      style,
       stuckT: 0,
       feintT: 0,
       feintCd: 1.5 + Math.random() * 2,
@@ -1847,6 +1873,15 @@ export class FoundryGame {
       chargeDirZ: 0,
       chargeLocked: false,
       enraged: false,
+      /* squad personality — rolled per raider so no two waves play alike */
+      flank: Math.random() < 0.5 ? -1 : 1,
+      caution: kind === "scrapper" ? 0.7 + Math.random() * 0.25 : kind === "runner" ? 0.12 + Math.random() * 0.2 : 0.35 + Math.random() * 0.2,
+      aggression: 0.85 + Math.random() * 0.3,
+      hesitateT: Math.random() * 0.5,
+      hesitateCd: 2 + Math.random() * 3,
+      laneAngle: Math.atan2(x - this.pos.x, z - this.pos.z),
+      laneTarget: Math.atan2(x - this.pos.x, z - this.pos.z),
+      repositionT: 2 + Math.random() * 3,
       burst: 0,
       burstT: 0,
       barBackMat,
@@ -1869,24 +1904,6 @@ export class FoundryGame {
     const set = new Set<THREE.Object3D>();
     e.group.traverse((o) => set.add(o));
     this.shootables = this.shootables.filter((m) => !set.has(m));
-  }
-
-  private spawnEnemy() {
-    if (this.enemies.filter((e) => e.state !== "dead").length >= 20) return;
-    const kind = this.spawnQueue.shift();
-    if (!kind) return;
-    const gates: [number, number][] = [[0, -ARENA + 2.5], [0, ARENA - 2.5], [-ARENA + 2.5, 0], [ARENA - 2.5, 0]];
-    const [gx, gz] = gates[(Math.random() * gates.length) | 0];
-    const x = gx + (Math.abs(gx) > 1 ? 0 : (Math.random() - 0.5) * 10);
-    const z = gz + (Math.abs(gz) > 1 ? 0 : (Math.random() - 0.5) * 10);
-    const e = this.buildEnemy(kind, x, z);
-    this.enemies.push(e);
-    this.tmpV.set(x, 0.5, z);
-    this.spawnParticles(this.tmpV, 14, ["#ff2e1f", "#7a1a10"], 4, 0.5, 6);
-    sfx.spawnRoar();
-    for (const gl of this.gateLights) {
-      gl.intensity = 90;
-    }
   }
 
   private damageEnemy(
@@ -2357,26 +2374,90 @@ export class FoundryGame {
   private beginWave() {
     this.wave++;
     this.secondWindUsed = false;
-    /* a fair ramp: wave 1 is a small pack of sprinters to learn the guns on,
-       gunmen join at wave 2, heavies at wave 3 — never a sudden wall */
+    /* ---------- squad composition: a coherent shape, not a grab-bag ----------
+       Wave 1 is a runner pack to learn on. Wave 2 adds a gunline. Wave 3+
+       anchors the assault with heavies. Ratios shift so the mid game is
+       balanced and the late game leans on guns and brutes. */
     const count = Math.min(3 + this.wave * 2 + Math.floor(this.wave * this.wave * 0.14), 24);
     const brutes = this.wave >= 3 ? Math.min(1 + Math.floor((this.wave - 3) / 2), 4) : 0;
-    const scrappers =
-      this.wave >= 2 ? Math.max(1, Math.min(count - brutes - 2, 1 + Math.floor((this.wave - 1) * 0.8))) : 0;
+    const scrappers = this.wave >= 2 ? Math.max(1, Math.min(count - brutes - 2, 1 + Math.floor((this.wave - 1) * 0.8))) : 0;
     const runners = Math.max(2, count - brutes - scrappers);
-    this.spawnQueue = [];
-    for (let i = 0; i < scrappers; i++) this.spawnQueue.push("scrapper");
-    for (let i = 0; i < runners; i++) this.spawnQueue.push("runner");
-    for (let i = 0; i < brutes; i++) this.spawnQueue.push("brute");
-    /* shuffle */
-    for (let i = this.spawnQueue.length - 1; i > 0; i--) {
+
+    /* ---------- split the squad into coordinated pulses ----------
+       vanguard (skirmishers) hits first and fast, the gunline sets up a beat
+       later to suppress, heavies anchor last. Each pours through its own gate
+       so the assault arrives from several directions at once. */
+    const gates: [number, number][] = [
+      [0, -ARENA + 2.5],
+      [0, ARENA - 2.5],
+      [-ARENA + 2.5, 0],
+      [ARENA - 2.5, 0],
+    ];
+    for (let i = gates.length - 1; i > 0; i--) {
       const j = (Math.random() * (i + 1)) | 0;
-      [this.spawnQueue[i], this.spawnQueue[j]] = [this.spawnQueue[j], this.spawnQueue[i]];
+      [gates[i], gates[j]] = [gates[j], gates[i]];
     }
+    const fill = (n: number, k: EnemyKind): EnemyKind[] => new Array(n).fill(k);
+    const pulses: SpawnPulse[] = [];
+    /* sometimes the gunline leads with suppressing fire instead of the rush */
+    const gunsFirst = this.wave >= 3 && Math.random() < 0.35;
+    const push = (queue: EnemyKind[], delay: number, interval: number) => {
+      if (queue.length > 0) pulses.push({ queue, gate: gates[pulses.length % gates.length], delay, interval, t: 0 });
+    };
+    if (gunsFirst) {
+      push(fill(scrappers, "scrapper"), 0.4, 0.7);
+      push(fill(runners, "runner"), 1.8, 0.5);
+    } else {
+      push(fill(runners, "runner"), 0.4, 0.5);
+      push(fill(scrappers, "scrapper"), 1.8, 0.7);
+    }
+    push(fill(brutes, "brute"), 3.2, 1.0);
+
+    this.spawnPulses = pulses;
     this.spawnT = 0.5;
     this.waveMode = "active";
-    this.onEvent({ type: "wave", wave: this.wave, count: this.spawnQueue.length });
+    this.onEvent({ type: "wave", wave: this.wave, count: this.queuedCount() });
     sfx.waveHorn();
+  }
+
+  /** raiders still queued across all pulses */
+  private queuedCount(): number {
+    let n = 0;
+    for (const p of this.spawnPulses) n += p.queue.length;
+    return n;
+  }
+
+  /** tick every pulse, releasing raiders on their own schedule */
+  private processSpawns(dt: number) {
+    for (const p of this.spawnPulses) {
+      if (p.queue.length === 0) continue;
+      if (p.delay > 0) {
+        p.delay -= dt;
+        continue;
+      }
+      p.t -= dt;
+      if (p.t <= 0) {
+        const kind = p.queue.shift();
+        if (kind) this.spawnFromPulse(kind, p.gate);
+        p.t = p.interval * (0.7 + Math.random() * 0.6);
+      }
+    }
+    this.spawnPulses = this.spawnPulses.filter((p) => p.queue.length > 0 || p.delay > 0);
+  }
+
+  private spawnFromPulse(kind: EnemyKind, gate: [number, number]) {
+    if (this.enemies.filter((e) => e.state !== "dead").length >= 20) {
+      return;
+    }
+    const [gx, gz] = gate;
+    const x = gx + (Math.abs(gx) > 1 ? 0 : (Math.random() - 0.5) * 10);
+    const z = gz + (Math.abs(gz) > 1 ? 0 : (Math.random() - 0.5) * 10);
+    const e = this.buildEnemy(kind, x, z);
+    this.enemies.push(e);
+    this.tmpV.set(x, 0.5, z);
+    this.spawnParticles(this.tmpV, 14, ["#ff2e1f", "#7a1a10"], 4, 0.5, 6);
+    sfx.spawnRoar();
+    for (const gl of this.gateLights) gl.intensity = 90;
   }
 
   private clearWave() {
@@ -2909,16 +2990,14 @@ export class FoundryGame {
       this.waveT -= dt;
       if (this.waveT <= 0) this.beginWave();
     } else {
-      this.spawnT -= dt;
-      const interval = Math.max(0.28, 1.15 - this.wave * 0.06);
-      if (this.spawnT <= 0 && this.spawnQueue.length > 0) {
-        this.spawnEnemy();
-        this.spawnT = interval;
-      }
-      if (this.spawnQueue.length === 0 && this.enemies.every((e) => e.state === "dead")) {
+      this.processSpawns(dt);
+      if (this.queuedCount() === 0 && this.enemies.every((e) => e.state === "dead")) {
         this.clearWave();
       }
     }
+
+    /* ---------- squad brain: read the battlefield so archetypes interlock ---------- */
+    this.updateSquadBrain();
 
     /* ---------- enemies ---------- */
     for (const e of this.enemies) this.updateEnemy(e, dt, t);
@@ -3004,7 +3083,7 @@ export class FoundryGame {
     this.camera.rotation.set(this.pitch + this.rig.camPitch + this.aimPitch, this.yaw + this.rig.camYaw + this.aimYaw, shR);
 
     /* ---------- HUD ---------- */
-    const alive = this.enemies.filter((e) => e.state !== "dead").length + this.spawnQueue.length;
+    const alive = this.enemies.filter((e) => e.state !== "dead").length + this.queuedCount();
     const eq = this.equippedMods[this.weaponIdx];
     const modKey = `${this.weaponIdx}|${eq ?? "-"}`;
     if (modKey !== this.modsCacheKey) {
@@ -3041,6 +3120,28 @@ export class FoundryGame {
   }
 
   private semiLock = false;
+
+  /* The squad reads the battlefield once per frame and each archetype keys
+     off the result: melee push harder under covering fire, gunners back off
+     and open lanes when melee is in the player's face, and everyone spreads. */
+  private updateSquadBrain() {
+    let meleeEngaged = false;
+    let gunnersFiring = 0;
+    let brutes = 0;
+    for (const e of this.enemies) {
+      if (e.state === "dead" || e.state === "rise") continue;
+      if (e.kind === "scrapper") {
+        if (e.state === "windup" || e.state === "strike") gunnersFiring++;
+      } else {
+        brutes += e.kind === "brute" ? 1 : 0;
+        const d = Math.hypot(this.pos.x - e.group.position.x, this.pos.z - e.group.position.z);
+        if (d < 3.4 || e.state === "windup" || e.state === "strike" || e.state === "charge") meleeEngaged = true;
+      }
+    }
+    this.squadMeleeEngaged = meleeEngaged;
+    this.squadGunnersFiring = gunnersFiring;
+    this.squadBrutesActive = brutes > 0;
+  }
 
   private updateEnemy(e: Enemy, dt: number, t: number) {
     e.flash = Math.max(0, e.flash - dt * 6);
@@ -3120,44 +3221,82 @@ export class FoundryGame {
 
     if (e.state === "chase") {
       e.wobble += dt * 3;
-      const sp = e.speed * stunMul;
+      /* per-raider hesitation — a brief stumble keeps the rush organic */
+      e.hesitateCd -= dt;
+      if (e.hesitateCd <= 0) {
+        e.hesitateT = 0.15 + Math.random() * 0.35;
+        e.hesitateCd = 2.5 + Math.random() * 3;
+      }
+      if (e.hesitateT > 0) e.hesitateT -= dt;
+      const hesitating = e.hesitateT > 0;
+      /* melee close faster while their gunners lay down covering fire */
+      const covering = e.kind !== "scrapper" && this.squadGunnersFiring > 0 ? 1.22 : 1;
+      const sp = e.speed * stunMul * e.aggression * covering;
       const tangX = -dirZ * e.orbitDir;
       const tangZ = dirX * e.orbitDir;
       const orbitR = e.range * 1.3;
-      let moveX: number;
-      let moveZ: number;
+      let moveX = 0;
+      let moveZ = 0;
       let moveMul = 1;
 
       if (e.kind === "scrapper") {
-        /* GUNNER: plants its feet at the shooting band — advances to reach
-           it, backs off when you push in, but never sidesteps. All of its
-           attention goes into lining up shots. */
-        const band = e.range;
-        const radial = Math.max(-0.9, Math.min(0.9, (dist - band) * 0.9));
-        moveX = dirX * radial;
-        moveZ = dirZ * radial;
-        moveMul = 1;
+        /* GUNNER: holds a firing lane on an arc at its flank side. It drifts
+           along the arc, periodically shifts to a fresh lane so the squad's
+           fire spreads, and yields ground when melee is in the thick of it
+           so the lanes stay clear. */
+        e.repositionT -= dt;
+        if (e.repositionT <= 0) {
+          e.laneTarget = e.laneAngle + (Math.random() - 0.5) * 1.7 + e.flank * 0.4;
+          e.repositionT = 2.5 + Math.random() * 3;
+        }
+        let dAng = e.laneTarget - e.laneAngle;
+        while (dAng > Math.PI) dAng -= Math.PI * 2;
+        while (dAng < -Math.PI) dAng += Math.PI * 2;
+        e.laneAngle += dAng * Math.min(1, dt * 1.3);
+        /* stand just inside the firing band; fall well back (and hold fire)
+           once melee is engaged so they have room to work, and hang a touch
+           deeper when a heavy is anchoring the push */
+        const desired =
+          e.range * 0.85 + e.caution * 1.4 + (this.squadMeleeEngaged ? 3.0 : 0) + (this.squadBrutesActive ? 0.8 : 0);
+        const tx = this.pos.x + Math.sin(e.laneAngle) * desired;
+        const tz = this.pos.z + Math.cos(e.laneAngle) * desired;
+        moveX = tx - e.group.position.x;
+        moveZ = tz - e.group.position.z;
+        const md = Math.hypot(moveX, moveZ);
+        moveMul = md < 0.7 ? 0 : Math.min(1, md / 2.5);
       } else if (!canAttack && dist < orbitR + 1.4) {
-        /* denied the attack token — circle just out of reach, hunting an opening */
+        /* denied the attack token — pace just out of reach on your own side,
+           hunting an opening instead of piling in */
         const radial = Math.max(-0.85, Math.min(0.85, (dist - orbitR) * 0.8));
         moveX = tangX * 0.95 + dirX * radial;
         moveZ = tangZ * 0.95 + dirZ * radial;
-        moveMul = 0.85;
+        moveMul = 0.85 * (hesitating ? 0.5 : 1);
       } else if (e.kind === "runner") {
-        /* sprinter: close relentlessly — circling is only a brief weave */
+        /* SKIRMISHER: sweeps in from its assigned flank, straightening only
+           for the final rush — so the pack arrives from several angles */
+        const sweep = Math.max(0, Math.min(1, (dist - e.range) / (e.range * 1.4)));
+        const off = e.flank * 2.8 * sweep;
+        const tx = this.pos.x - dirZ * off;
+        const tz = this.pos.z + dirX * off;
+        const ax = tx - e.group.position.x;
+        const az = tz - e.group.position.z;
+        const ad = Math.hypot(ax, az) || 1;
         const wob = Math.sin(e.wobble * 2.2) * 0.18;
-        moveX = dirX + -dirZ * wob;
-        moveZ = dirZ + dirX * wob;
-        moveMul = 1.1;
-      } else if (e.style === "flank" && dist > e.range * 1.05) {
-        /* sweep wide and come in from the side */
-        const closeness = Math.max(0.3, Math.min(1, (dist - e.range) / 4));
-        moveX = dirX * closeness + tangX * (1 - closeness) * 1.15;
-        moveZ = dirZ * closeness + tangZ * (1 - closeness) * 1.15;
+        moveX = ax / ad + -dirZ * wob;
+        moveZ = az / ad + dirX * wob;
+        moveMul = (hesitating ? 0.3 : 1) * 1.1;
       } else {
-        const wob = Math.sin(e.wobble) * 0.35;
-        moveX = dirX + -dirZ * wob;
-        moveZ = dirZ + dirX * wob;
+        /* HEAVY: the slow, steady anchor — a slight lane offset keeps
+           multiple brutes from stacking on the same point */
+        const off = e.flank * 1.5;
+        const tx = this.pos.x - dirZ * off;
+        const tz = this.pos.z + dirX * off;
+        const ax = tx - e.group.position.x;
+        const az = tz - e.group.position.z;
+        const ad = Math.hypot(ax, az) || 1;
+        moveX = ax / ad;
+        moveZ = az / ad;
+        moveMul = (hesitating ? 0.4 : 1) * 0.92;
       }
       const ml = Math.hypot(moveX, moveZ) || 1;
       e.mvx = (moveX / ml) * sp * moveMul;
@@ -3167,16 +3306,19 @@ export class FoundryGame {
 
       e.walkT += dt * sp * 1.9;
 
-      /* separation from other enemies */
+      /* separation — gunners keep a wide firing line so the squad spreads
+         into distinct lanes instead of bunching on one ray */
       for (const o of this.enemies) {
         if (o === e || o.state === "dead") continue;
         const sx = e.group.position.x - o.group.position.x;
         const sz = e.group.position.z - o.group.position.z;
         const sd = Math.hypot(sx, sz);
-        const min = 0.85 * ENEMY_DEFS[e.kind].scale;
+        const bothRanged = e.kind === "scrapper" && o.kind === "scrapper";
+        const min = bothRanged ? 2.8 : 0.85 * ENEMY_DEFS[e.kind].scale;
         if (sd < min && sd > 0.001) {
-          e.group.position.x += (sx / sd) * (min - sd) * 0.5;
-          e.group.position.z += (sz / sd) * (min - sd) * 0.5;
+          const push = bothRanged ? 0.7 : 0.5;
+          e.group.position.x += (sx / sd) * (min - sd) * push;
+          e.group.position.z += (sz / sd) * (min - sd) * push;
         }
       }
       this.collideCircle(e.group.position, 0.45 * ENEMY_DEFS[e.kind].scale);
@@ -3188,10 +3330,11 @@ export class FoundryGame {
       while (dr < -Math.PI) dr += Math.PI * 2;
       e.group.rotation.y += dr * Math.min(1, dt * 10);
 
-      /* anti-stuck — wedged behind cover? flip orbit side and back off */
+      /* anti-stuck — wedged behind cover? flip orbit side and back off.
+         (skipped when the raider is deliberately holding position) */
       const moved = Math.hypot(e.group.position.x - prevX, e.group.position.z - prevZ);
-      if (moved < sp * 0.3 * dt) e.stuckT += dt;
-      else e.stuckT = 0;
+      if (moveMul > 0.2 && moved < sp * 0.3 * dt) e.stuckT += dt;
+      else if (moveMul > 0.2) e.stuckT = 0;
       if (e.stuckT > 0.65) {
         e.stuckT = 0;
         e.orbitDir *= -1;
@@ -3199,8 +3342,10 @@ export class FoundryGame {
         e.group.position.z -= dirZ * 0.4;
       }
 
-      /* gunners won't pull the trigger at point-blank — they back off instead */
-      if (dist < e.range && canAttack && (e.kind !== "scrapper" || dist > 2.3)) {
+      /* gunners fire from their lane (a slightly generous band) but won't
+         pull the trigger at point-blank — they back off instead */
+      const inReach = e.kind === "scrapper" ? dist < e.range + 1.2 && dist > 2.3 : dist < e.range;
+      if (inReach && canAttack) {
         e.state = "windup";
         e.stateT = 0;
         if (e.kind === "scrapper") {
