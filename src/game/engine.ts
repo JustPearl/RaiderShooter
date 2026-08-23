@@ -1803,21 +1803,8 @@ export class FoundryGame {
         return me;
       };
 
-      /* suppressor — baffle tube with machining rings and an end cap */
-      const supp = new THREE.Group();
-      const tube = cy(r, r * 0.92, 0.3, black);
-      supp.add(tube);
-      for (let k = 0; k < 4; k++) {
-        const ring = cy(r * 1.05, r * 1.05, 0.012, steel);
-        ring.position.z = -0.105 + k * 0.07;
-        supp.add(ring);
-      }
-      const cap = cy(r * 0.6, r * 0.6, 0.02, steel);
-      cap.position.z = -0.155;
-      supp.add(cap);
-      const suppBand = cy(r * 1.02, r * 1.02, 0.03, amberAt);
-      suppBand.position.z = 0.12;
-      supp.add(suppBand);
+      /* suppressor — a plain black cylinder, no detail at all */
+      const supp = cy(r, r, 0.3, black);
       supp.position.set(0, 0, -0.16);
       muzzle.add(supp);
       rec.suppressor.push(supp);
@@ -2134,9 +2121,12 @@ export class FoundryGame {
   }
 
   private spawnMuzzleFlash() {
+    if (this.hasMod("suppressor")) return; /* a can shows nothing */
     const muzzle = this.vmMuzzles[this.weaponIdx];
     muzzle.getWorldPosition(this.tmpV);
     this.camera.getWorldDirection(this.tmpV2);
+    /* the blast blooms at the tip of whatever is threaded onto the muzzle */
+    this.tmpV.addScaledVector(this.tmpV2, this.attachLen());
     for (const f of this.muzzleFlashes) {
       if (f.life <= 0) {
         f.group.visible = true;
@@ -2511,6 +2501,11 @@ export class FoundryGame {
   private modTraumaScale(): number {
     return this.hasMod("brake") ? (this.modTier("brake") === 2 ? 0.7 : 0.8) : 1;
   }
+  /** how far the mounted muzzle device sticks out past the muzzle anchor —
+      flashes, puffs and tracers all start at the hardware's tip */
+  private attachLen(): number {
+    return this.hasMod("suppressor") ? 0.3 : this.hasMod("brake") ? 0.15 : 0;
+  }
   private modSwayMul(): number {
     let m = 1;
     if (this.hasMod("mag")) m *= 1.15; /* heavier feed */
@@ -2597,24 +2592,33 @@ export class FoundryGame {
     else if (this.weaponIdx === 1) this.pumpT = 0;
     else this.slideT = 1; /* open bolt reciprocates like the pistol slide */
     this.ejectShell();
-    /* suppressor cuts the flash to a dim flicker */
-    const flashMul = this.hasMod("suppressor") ? 0.35 : this.hasMod("brake") ? 1.25 : 1;
-    if (this.gunLight)
-      this.gunLight.intensity = (this.weaponIdx === 1 ? 26 : this.weaponIdx === 2 ? 9 : this.weaponIdx === 3 ? 17 : 14) * flashMul;
+    const suppressed = this.hasMod("suppressor");
+    if (suppressed) {
+      /* a can swallows the fireball — just a lazy smoke puff at its tip */
+      this.vmMuzzles[this.weaponIdx].getWorldPosition(this.tmpV);
+      this.camera.getWorldDirection(this.tmpV2);
+      this.tmpV.addScaledVector(this.tmpV2, this.attachLen());
+      this.spawnParticles(this.tmpV.clone(), 4, ["#777773", "#5c5c58", "#91918a"], 0.35, 0.5, -0.35);
+    } else {
+      const flashMul = this.hasMod("brake") ? 1.25 : 1;
+      if (this.gunLight)
+        this.gunLight.intensity = (this.weaponIdx === 1 ? 26 : this.weaponIdx === 2 ? 9 : this.weaponIdx === 3 ? 17 : 14) * flashMul;
+    }
     if (this.weaponIdx === 1) sfx.shotgun();
     else if (this.weaponIdx === 2) sfx.smg();
     else if (this.weaponIdx === 3) sfx.mg();
     else sfx.pistol();
     /* the heavy report startles raiders like a shotgun blast would */
     this.notifyShot(this.weaponIdx === 1 || this.weaponIdx === 3);
-    this.spawnMuzzleFlash();
+    if (!suppressed) this.spawnMuzzleFlash();
 
     const spread = this.currentSpread();
     const camDir = new THREE.Vector3();
     this.camera.getWorldDirection(camDir);
     const muzzle = this.vmMuzzles[this.weaponIdx];
     muzzle.getWorldPosition(this.tmpV);
-    const origin = this.tmpV.clone();
+    /* tracers and hits originate at the muzzle device's tip when one is mounted */
+    const origin = this.tmpV.clone().addScaledVector(camDir, this.attachLen());
 
     const berserkOn = this.berserk && this.hp < this.maxHp * 0.4;
     const crit = Math.random() < this.critChance;
