@@ -273,6 +273,7 @@ export class FoundryGame {
   private vmMuzzles: THREE.Object3D[] = [];
   private vmBase = new THREE.Vector3(0.3, -0.28, -0.55);
   private vmKick = 0;
+  private vmPush = 0;
   private vmSlide: THREE.Mesh | null = null;
   private vmPump: THREE.Mesh | null = null;
   private vmBolt: THREE.Mesh | null = null;
@@ -549,6 +550,7 @@ export class FoundryGame {
     this.recoilYaw = 0;
     this.recoilSpring = 0;
     this.recoilSpringV = 0;
+    this.vmPush = 0;
     for (const e of this.enemies) this.scene.remove(e.group);
     this.enemies = [];
     this.shootables = this.shootables.filter((m) => m.userData.hit?.kind !== "enemy");
@@ -578,6 +580,7 @@ export class FoundryGame {
     this.recoilYaw = 0;
     this.recoilSpring = 0;
     this.recoilSpringV = 0;
+    this.vmPush = 0;
     this.startIntermission();
   }
 
@@ -1108,7 +1111,7 @@ export class FoundryGame {
     smg.add(portK);
 
     /* MG-7 HOG — belt-fed 7.62 general-purpose gun, M60/M2 lineage:
-       heavy receiver, long finned barrel, muzzle brake, top box mag */
+       heavy receiver, long finned barrel, muzzle brake, left-side box feed */
     const mg = new THREE.Group();
     const heavy = new THREE.MeshLambertMaterial({ color: "#33383e", flatShading: true });
     const olive = new THREE.MeshLambertMaterial({ color: "#4a4f3c", flatShading: true });
@@ -1116,17 +1119,17 @@ export class FoundryGame {
     const mgBody = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.13, 0.46), heavy);
     mgBody.position.set(0, 0.02, 0.02);
     mg.add(mgBody);
-    /* top box mag — the belt/box feed riding over the receiver */
-    const boxMag = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.1, 0.2), olive);
-    boxMag.position.set(0, 0.135, 0.04);
+    /* box-fed ammo drum hanging off the lower-left of the receiver */
+    const boxMag = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.22), olive);
+    boxMag.position.set(-0.105, -0.055, 0.04);
     mg.add(boxMag);
-    const boxLid = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.02, 0.21), heavy);
-    boxLid.position.set(0, 0.195, 0.04);
+    const boxLid = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.13, 0.23), heavy);
+    boxLid.position.set(-0.162, -0.055, 0.04);
     mg.add(boxLid);
-    /* feed chute from box into receiver */
-    const chute = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.1), darkMetal);
-    chute.position.set(0, 0.085, -0.06);
-    chute.rotation.x = 0.5;
+    /* feed chute angling up-right from the box into the receiver */
+    const chute = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.12), darkMetal);
+    chute.position.set(-0.062, -0.005, 0.02);
+    chute.rotation.z = 0.85;
     mg.add(chute);
     /* long heavy barrel with cooling fins */
     const barrelM = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.036, 0.62, 10), heavy);
@@ -1677,16 +1680,21 @@ export class FoundryGame {
     const kickVar = 0.85 + Math.random() * 0.6; /* 85%–145% power per shot */
     const brace = 1 - 0.35 * this.aimAmt;
     const totalKick = w.kick * kickVar * brace;
-    /* springy climb — an upward impulse the spring carries back past rest */
-    this.recoilSpringV += totalKick * 26;
+    /* springy climb — an upward impulse the spring carries back past rest.
+       The HOG beds into the shoulder, so its muzzle barely levers up. */
+    const climbMul = this.weaponIdx === 3 ? 0.3 : 1;
+    this.recoilSpringV += totalKick * 26 * climbMul;
     const sideKick = (Math.random() - 0.5) * 2 * totalKick * (this.weaponIdx === 1 ? 0.7 : 0.52);
     this.yaw += sideKick * 0.3;
-    /* damped visual snap */
-    this.recoilPitch += totalKick * 0.42;
+    /* damped visual snap — the HOG barely snaps the muzzle up */
+    this.recoilPitch += totalKick * 0.42 * climbMul;
     this.recoilYaw += sideKick * 0.45;
     this.fovKick += w.fovPunch * (0.6 + Math.random() * 0.4);
-    this.vmKick = (this.weaponIdx === 1 ? 0.19 : this.weaponIdx === 3 ? 0.11 : 0.085) * kickVar;
-    this.trauma = Math.min(1.4, this.trauma + (this.weaponIdx === 1 ? 0.26 : this.weaponIdx === 3 ? 0.1 : 0.08) * kickVar);
+    this.vmKick = (this.weaponIdx === 1 ? 0.19 : this.weaponIdx === 3 ? 0.05 : 0.085) * kickVar;
+    /* the HOG's energy goes straight back into the shoulder — a heavy shove
+       with a jolt, not a muzzle flip */
+    this.vmPush = this.weaponIdx === 3 ? 0.15 * kickVar : 0;
+    this.trauma = Math.min(1.4, this.trauma + (this.weaponIdx === 1 ? 0.26 : this.weaponIdx === 3 ? 0.12 : 0.08) * kickVar);
     if (this.weaponIdx === 0) this.slideT = 1;
     else if (this.weaponIdx === 1) this.pumpT = 0;
     else this.slideT = 1; /* open bolt reciprocates like the pistol slide */
@@ -2130,6 +2138,7 @@ export class FoundryGame {
     this.recoilSpring += this.recoilSpringV * dt;
     this.fovKick *= Math.exp(-8 * dt);
     this.vmKick *= Math.exp(-14 * dt);
+    this.vmPush *= Math.exp(-11 * dt);
     if (this.gunLight) this.gunLight.intensity = Math.max(1.1, this.gunLight.intensity * Math.exp(-16 * dt));
     this.comboT -= dt;
     if (this.comboT <= 0) this.combo = 0;
@@ -2215,9 +2224,9 @@ export class FoundryGame {
     const baseY = this.vmBase.y * (1 - aim) + -0.165 * aim;
     const baseZ = this.vmBase.z * (1 - aim) + -0.34 * aim;
     const idleAmp = 1 - aim * 0.85;
-    let vy = baseY + this.bobY * 0.6 * idleAmp + Math.sin(this.bobT) * bobAmp * 0.6 * idleAmp - swY * 0.4;
+    let vy = baseY + this.bobY * 0.6 * idleAmp + Math.sin(this.bobT) * bobAmp * 0.6 * idleAmp - swY * 0.4 - this.vmPush * 0.3;
     let vx = baseX + Math.sin(this.bobT * 0.5) * bobAmp * 0.4 * idleAmp + swX * 0.45;
-    let vz = baseZ + this.vmKick + swY * 0.12;
+    let vz = baseZ + this.vmKick + this.vmPush + swY * 0.12;
     let vrx = this.vmKick * 2.2 + swY * 1.1;
     let vry = -swX * 0.9 + this.recoilYaw * 6;
     let vrz = Math.sin(this.bobT) * bobAmp * 0.3 * idleAmp + swX * 0.5;
