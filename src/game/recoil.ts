@@ -334,15 +334,18 @@ export class RecoilRig {
    * gas/bolt push bleeds in over `gasT` seconds. Returns the permanent
    * horizontal drift to bake into the player's real aim (rifling walk +
    * shooter follow-through).
+   *
+   * `recoilScale` trims the effective impulse (a muzzle brake vents gas and
+   * lowers J, which scales climb, shove, yaw, roll and drift together).
    */
-  fire(spec: RecoilSpec, aimAmt: number): number {
+  fire(spec: RecoilSpec, aimAmt: number, recoilScale = 1): number {
     this.variance = 0.85 + Math.random() * 0.6;
     /* bracing: a shoulder-welded gun (LMG) soaks far more impulse when
        aimed than a free-recoiling pistol does */
     const braced = 1 - spec.adsBrace * aimAmt;
     /* burst heat — the more you pour in, the harder each round climbs */
     this.burst = Math.min(1, this.burst + 0.3 * this.variance * braced);
-    const J = spec.impulseNs * this.variance * braced * (1 + 0.9 * this.burst);
+    const J = spec.impulseNs * this.variance * braced * (1 + 0.9 * this.burst) * recoilScale;
     this.energy = clamp(J / 13, 0, 1.4);
 
     /* ---- contact-point absorption ---- */

@@ -3,6 +3,7 @@ import { sfx } from "./audio";
 import { buildRaiderRig, updateRaiderAnim, WINDUP_TIME, type RaiderRig } from "./raider";
 import { RecoilRig, RECOIL_SPECS, RECOIL_INTENSITY } from "./recoil";
 import { AMMO, effectiveDamage, muzzleVelocity, type AmmoId, type AmmoSpec } from "./ammo";
+import { GUN_MODS, GUN_MOD_INDEX, type GunModId } from "./gunmods";
 import { createRagdoll, impulseRagdoll, stepRagdoll, type Ragdoll } from "./ragdoll";
 import {
   floorTexture,
@@ -26,10 +27,14 @@ export interface SkillCard {
   id: string;
   name: string;
   desc: string;
-  tag: "SYSTEMS" | "ABILITY";
+  /** skill category, or the owning gun's tag for gun-mod cards */
+  tag: string;
   rarity: Rarity;
   level: number; /* times already installed */
   maxLevel: number;
+  /* gun-mod cards carry an explicit trade-off ledger */
+  pros?: string[];
+  cons?: string[];
 }
 
 export interface HudData {
@@ -41,6 +46,8 @@ export interface HudData {
   weaponName: string;
   /** live cartridge readout: designation · muzzle velocity out of this barrel */
   ammoLine: string;
+  /** short tags of gun-mods installed on the current weapon */
+  mods: string[];
   wave: number;
   score: number;
   kills: number;
@@ -260,6 +267,14 @@ export class FoundryGame {
   private berserk = false;
   private berserkBonus = 0;
   private skillLevels: Record<string, number> = {};
+  /* per-weapon installed modifications — [weaponIdx][GunModId] */
+  private gunMods: Record<GunModId, boolean>[] = WEAPONS.map(() => ({
+    suppressor: false,
+    brake: false,
+    mag: false,
+    laser: false,
+    light: false,
+  }));
   private bobT = 0;
   private bobY = 0;
   private trauma = 0;
@@ -546,6 +561,8 @@ export class FoundryGame {
     this.berserk = false;
     this.berserkBonus = 0;
     this.skillLevels = {};
+    this.gunMods = WEAPONS.map(() => ({ suppressor: false, brake: false, mag: false, laser: false, light: false }));
+    this.refreshModVisuals();
     WEAPONS[0].magSize = 12;
     this.pos.set(0, 0, 8);
     this.vel.set(0, 0, 0);
@@ -1217,6 +1234,111 @@ export class FoundryGame {
     this.vmBolt = bolt;
     this.vmMgBolt = mgBolt;
     this.gunLight = gunLight;
+    this.buildModAttachments([pistol, shotgun, smg, mg]);
+  }
+
+  /* ---- universal gun-mod hardware (see gunmods.ts) ---- */
+  private modVisuals: Record<GunModId, THREE.Object3D[]>[] = [];
+  private flashLight: THREE.SpotLight | null = null;
+
+  private buildModAttachments(vms: THREE.Group[]) {
+    const steel = new THREE.MeshLambertMaterial({ color: "#5d6167", flatShading: true });
+    const dark = new THREE.MeshLambertMaterial({ color: "#23262b", flatShading: true });
+    const black = new THREE.MeshLambertMaterial({ color: "#101215", flatShading: true });
+    const sizes = [0.045, 0.06, 0.05, 0.055]; /* suppressor radius per gun */
+
+    this.modVisuals = vms.map((vm, i) => {
+      const muzzle = this.vmMuzzles[i];
+      const rec: Record<GunModId, THREE.Object3D[]> = { suppressor: [], brake: [], mag: [], laser: [], light: [] };
+
+      /* suppressor — a long baffle tube over the muzzle */
+      const supp = new THREE.Mesh(new THREE.CylinderGeometry(sizes[i], sizes[i] * 0.92, 0.3, 10), black);
+      supp.rotation.x = Math.PI / 2;
+      supp.position.set(0, 0, -0.16);
+      muzzle.add(supp);
+      rec.suppressor.push(supp);
+
+      /* muzzle brake — a finned compensator */
+      const brake = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(sizes[i] * 1.25, sizes[i] * 1.25, 0.13, 8), steel);
+      body.rotation.x = Math.PI / 2;
+      brake.add(body);
+      for (let f = 0; f < 3; f++) {
+        const fin = new THREE.Mesh(new THREE.BoxGeometry(sizes[i] * 2.6, 0.014, 0.02), steel);
+        fin.position.set(0, 0, -0.045 + f * 0.045);
+        brake.add(fin);
+      }
+      brake.position.set(0, 0, -0.08);
+      muzzle.add(brake);
+      rec.brake.push(brake);
+
+      /* extended mag — a longer feed hanging under the receiver */
+      const mag = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.24, 0.09), dark);
+      mag.position.set(0, -0.2, -0.05);
+      vm.add(mag);
+      rec.mag.push(mag);
+
+      /* laser — emitter block + a faint red beam downrange */
+      const laser = new THREE.Group();
+      const emitter = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.05, 0.09), black);
+      emitter.position.set(0, -0.075, -0.02);
+      laser.add(emitter);
+      const beamGeo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, -0.075, -0.07),
+        new THREE.Vector3(0, -0.075, -30),
+      ]);
+      const beam = new THREE.Line(beamGeo, new THREE.LineBasicMaterial({ color: "#ff3020", transparent: true, opacity: 0.5 }));
+      laser.add(beam);
+      const dot = new THREE.Mesh(new THREE.SphereGeometry(0.02, 6, 6), new THREE.MeshBasicMaterial({ color: "#ff3020" }));
+      dot.position.set(0, -0.075, -2.2);
+      laser.add(dot);
+      muzzle.add(laser);
+      rec.laser.push(laser);
+
+      /* flashlight — torch body + a volumetric cone (real light added to camera) */
+      const light = new THREE.Group();
+      const torch = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.038, 0.12, 8), dark);
+      torch.rotation.x = Math.PI / 2;
+      torch.position.set(0, -0.08, -0.05);
+      light.add(torch);
+      const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.012, 8), new THREE.MeshBasicMaterial({ color: "#fff3c4" }));
+      lens.rotation.x = Math.PI / 2;
+      lens.position.set(0, -0.08, -0.11);
+      light.add(lens);
+      const cone = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.02, 0.9, 8, 14, 1, true),
+        new THREE.MeshBasicMaterial({ color: "#ffe9a8", transparent: true, opacity: 0.05, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending })
+      );
+      cone.rotation.x = Math.PI / 2;
+      cone.position.set(0, -0.08, -4.2);
+      light.add(cone);
+      muzzle.add(light);
+      rec.light.push(light);
+
+      return rec;
+    });
+
+    /* one real spotlight on the camera, driven by the active gun's flashlight */
+    this.flashLight = new THREE.SpotLight("#ffe9c4", 0, 20, 0.5, 0.55, 1.1);
+    this.flashLight.position.set(0.15, -0.1, -0.4);
+    const target = new THREE.Object3D();
+    target.position.set(0, -0.5, -12);
+    this.camera.add(target);
+    this.flashLight.target = target;
+    this.camera.add(this.flashLight);
+  }
+
+  /* show/hide each gun's installed hardware */
+  private refreshModVisuals() {
+    const mods = this.gunMods[this.weaponIdx];
+    this.modVisuals.forEach((rec, i) => {
+      const active = i === this.weaponIdx;
+      (Object.keys(rec) as GunModId[]).forEach((id) => {
+        const on = active && mods[id];
+        rec[id].forEach((o) => (o.visible = on));
+      });
+    });
+    if (this.flashLight) this.flashLight.intensity = mods.light ? 2.6 : 0;
   }
 
   /* ============================== FX pools ============================== */
@@ -1412,7 +1534,10 @@ export class FoundryGame {
            blast reads as a radial star from the POV and never repeats */
         this.tmpQ2.setFromAxisAngle(this.tmpV3.set(0, 0, 1), Math.random() * Math.PI * 2);
         f.group.quaternion.copy(this.camera.quaternion).multiply(this.tmpQ2);
-        const base = WEAPON_AMMO[this.weaponIdx].flashScale;
+        /* suppressor trims the flash to a dim puff; a brake flares it wider */
+        const base =
+          WEAPON_AMMO[this.weaponIdx].flashScale *
+          (this.hasMod("suppressor") ? 0.35 : this.hasMod("brake") ? 1.25 : 1);
         f.len = base * (0.8 + Math.random() * 0.45);
         f.wid = f.len * (0.78 + Math.random() * 0.3);
         f.group.scale.set(f.len, f.wid, 1);
@@ -1665,7 +1790,7 @@ export class FoundryGame {
   private startReload() {
     const w = WEAPONS[this.weaponIdx];
     if (this.wState === "reloading") return;
-    if (this.mags[this.weaponIdx] >= w.magSize) return;
+    if (this.mags[this.weaponIdx] >= this.effMagSize(this.weaponIdx)) return;
     if (this.reserves[this.weaponIdx] <= 0) return;
     this.wState = "reloading";
     this.wT = this.effReload(w);
@@ -1673,16 +1798,57 @@ export class FoundryGame {
     sfx.reload(0);
   }
 
+  /* ---- universal gun-mod effect helpers (see gunmods.ts) ---- */
+  private hasMod(id: GunModId): boolean {
+    return this.gunMods[this.weaponIdx][id];
+  }
+  private modDmgMul(): number {
+    let m = 1;
+    if (this.hasMod("suppressor")) m *= 0.88; /* subsonic loads hit softer */
+    if (this.hasMod("light")) m *= 1.05; /* dazzled targets */
+    return m;
+  }
+  private modSpreadMul(): number {
+    let m = 1;
+    if (this.hasMod("suppressor")) m *= 0.85;
+    if (this.hasMod("brake")) m *= 1.2; /* side-vented gas scatters the pattern */
+    if (this.hasMod("laser")) m *= 0.65;
+    return m;
+  }
+  private modBloomMul(): number {
+    return this.hasMod("laser") ? 0.8 : 1;
+  }
+  private modRecoilScale(): number {
+    return this.hasMod("brake") ? 0.7 : 1;
+  }
+  private modSwayMul(): number {
+    let m = 1;
+    if (this.hasMod("mag")) m *= 1.15; /* heavier feed */
+    if (this.hasMod("laser")) m *= 1.1; /* nose-heavy */
+    return m;
+  }
+  private effMagSize(idx: number): number {
+    const w = WEAPONS[idx];
+    return this.gunMods[idx].mag ? Math.round(w.magSize * 1.5) : w.magSize;
+  }
+  private reserveCap(idx: number): number {
+    const base = [Infinity, 48, 144, 180][idx];
+    return base * (this.gunMods[idx].mag ? 1.3 : 1);
+  }
+
   private effReload(w: WeaponDef): number {
-    return w.reloadTime / this.reloadMul;
+    let t = w.reloadTime / this.reloadMul;
+    if (this.hasMod("mag")) t *= 1.2; /* heavier mag, longer swap */
+    if (this.hasMod("laser")) t *= 1.1; /* rail clutter */
+    return t;
   }
 
   private currentSpread(): number {
     const w = WEAPONS[this.weaponIdx];
     /* quadratic heat bloom — trigger discipline keeps it tight,
        dumping the mag from the hip opens the cone wide */
-    const bloom = this.heat * this.heat * w.bloom;
-    const base = w.spread * (1 - 0.45 * this.aimAmt);
+    const bloom = this.heat * this.heat * w.bloom * this.modBloomMul();
+    const base = w.spread * (1 - 0.45 * this.aimAmt) * this.modSpreadMul();
     const speed = Math.hypot(this.vel.x, this.vel.z);
     let s = base + bloom * (1 - 0.85 * this.aimAmt) + speed * 0.0035;
     if (!this.grounded) s += 0.02 * (1 - 0.5 * this.aimAmt);
@@ -1716,14 +1882,19 @@ export class FoundryGame {
        bore height and body contact points solve the impulse — climb torque
        J·h/I, shoulder shove J/M, yaw/roll/drift from the gun's recoil
        velocity — then springs carry every axis back to rest ---- */
-    this.yaw += this.rig.fire(this.rigSpec, this.aimAmt);
-    this.fovKick += this.rigSpec.fovGain * this.rig.variance * RECOIL_INTENSITY * (0.6 + Math.random() * 0.4);
-    this.trauma = Math.min(1.4, this.trauma + this.rigSpec.traumaGain * this.rig.variance * RECOIL_INTENSITY);
+    /* a muzzle brake vents gas, trimming the effective impulse (and shake) */
+    const recoilScale = this.modRecoilScale();
+    this.yaw += this.rig.fire(this.rigSpec, this.aimAmt, recoilScale);
+    this.fovKick += this.rigSpec.fovGain * this.rig.variance * RECOIL_INTENSITY * recoilScale * (0.6 + Math.random() * 0.4);
+    this.trauma = Math.min(1.4, this.trauma + this.rigSpec.traumaGain * this.rig.variance * RECOIL_INTENSITY * recoilScale);
     if (this.weaponIdx === 0) this.slideT = 1;
     else if (this.weaponIdx === 1) this.pumpT = 0;
     else this.slideT = 1; /* open bolt reciprocates like the pistol slide */
     this.ejectShell();
-    if (this.gunLight) this.gunLight.intensity = this.weaponIdx === 1 ? 26 : this.weaponIdx === 2 ? 9 : this.weaponIdx === 3 ? 17 : 14;
+    /* suppressor cuts the flash to a dim flicker */
+    const flashMul = this.hasMod("suppressor") ? 0.35 : this.hasMod("brake") ? 1.25 : 1;
+    if (this.gunLight)
+      this.gunLight.intensity = (this.weaponIdx === 1 ? 26 : this.weaponIdx === 2 ? 9 : this.weaponIdx === 3 ? 17 : 14) * flashMul;
     if (this.weaponIdx === 1) sfx.shotgun();
     else if (this.weaponIdx === 2) sfx.smg();
     else if (this.weaponIdx === 3) sfx.mg();
@@ -1743,7 +1914,12 @@ export class FoundryGame {
     const crit = Math.random() < this.critChance;
     const amm = WEAPON_AMMO[this.weaponIdx];
     /* base is the load's stopping power at this barrel's velocity */
-    const dmg = WEAPON_DMG[this.weaponIdx] * this.dmgMul * (berserkOn ? 1 + 0.3 * this.berserkBonus : 1) * (crit ? 3 : 1);
+    const dmg =
+      WEAPON_DMG[this.weaponIdx] *
+      this.dmgMul *
+      this.modDmgMul() *
+      (berserkOn ? 1 + 0.3 * this.berserkBonus : 1) *
+      (crit ? 3 : 1);
     const pellets = w.pellets + (this.weaponIdx === 1 ? this.extraPellets : 0);
 
     let anyHit = false;
@@ -1901,9 +2077,9 @@ export class FoundryGame {
     const bonus = 250 * this.wave;
     this.score += bonus;
     this.hp = Math.min(this.maxHp, this.hp + 12);
-    this.reserves[1] = Math.min(48, this.reserves[1] + 10);
-    this.reserves[2] = Math.min(144, this.reserves[2] + 24);
-    this.reserves[3] = Math.min(180, this.reserves[3] + 30);
+    this.reserves[1] = Math.min(this.reserveCap(1), this.reserves[1] + 10);
+    this.reserves[2] = Math.min(this.reserveCap(2), this.reserves[2] + 24);
+    this.reserves[3] = Math.min(this.reserveCap(3), this.reserves[3] + 30);
     this.onEvent({ type: "cleared", wave: this.wave, bonus });
     sfx.waveClear();
     if (this.wave % 3 === 0) this.offerDraft();
@@ -1913,31 +2089,51 @@ export class FoundryGame {
   /* ============================== Skill draft ============================== */
 
   private rollCards(n: number): SkillCard[] {
-    const eligible = SKILLS.filter((s) => (this.skillLevels[s.id] ?? 0) < s.maxLevel);
+    type PoolItem = { weight: number; card: SkillCard };
+    const pool: PoolItem[] = [];
+    /* player skills */
+    for (const s of SKILLS) {
+      if ((this.skillLevels[s.id] ?? 0) >= s.maxLevel) continue;
+      pool.push({
+        weight: s.weight,
+        card: { id: s.id, name: s.name, desc: s.desc, tag: s.tag, rarity: s.rarity, level: this.skillLevels[s.id] ?? 0, maxLevel: s.maxLevel },
+      });
+    }
+    /* gun-mod cards — every not-yet-installed mod on every gun */
+    WEAPONS.forEach((w, wi) => {
+      for (const m of GUN_MODS) {
+        if (this.gunMods[wi][m.id]) continue;
+        pool.push({
+          weight: m.weight,
+          card: {
+            id: `mod:${m.id}:${wi}`,
+            name: m.name,
+            desc: m.desc,
+            tag: w.tag,
+            rarity: m.rarity,
+            level: 0,
+            maxLevel: 1,
+            pros: m.pros,
+            cons: m.cons,
+          },
+        });
+      }
+    });
     const cards: SkillCard[] = [];
-    const pool = [...eligible];
     while (cards.length < n && pool.length > 0) {
       let total = 0;
-      for (const s of pool) total += s.weight;
+      for (const it of pool) total += it.weight;
       let roll = Math.random() * total;
-      let pick = pool[0];
-      for (const s of pool) {
-        roll -= s.weight;
+      let idx = 0;
+      for (let i = 0; i < pool.length; i++) {
+        roll -= pool[i].weight;
         if (roll <= 0) {
-          pick = s;
+          idx = i;
           break;
         }
       }
-      pool.splice(pool.indexOf(pick), 1);
-      cards.push({
-        id: pick.id,
-        name: pick.name,
-        desc: pick.desc,
-        tag: pick.tag,
-        rarity: pick.rarity,
-        level: this.skillLevels[pick.id] ?? 0,
-        maxLevel: pick.maxLevel,
-      });
+      cards.push(pool[idx].card);
+      pool.splice(idx, 1);
     }
     return cards;
   }
@@ -1956,13 +2152,34 @@ export class FoundryGame {
 
   chooseCard(id: string) {
     if (this.phase !== "draft") return;
-    this.applyCard(id);
-    this.skillLevels[id] = (this.skillLevels[id] ?? 0) + 1;
+    if (id.startsWith("mod:")) {
+      this.applyGunMod(id);
+    } else {
+      this.applyCard(id);
+      this.skillLevels[id] = (this.skillLevels[id] ?? 0) + 1;
+    }
     sfx.pickup("ammo");
     this.startIntermission();
     this.phase = "playing";
     this.onEvent({ type: "playing" });
     this.lockPointer();
+  }
+
+  /* install a universal gun mod — id format: "mod:<modId>:<weaponIdx>" */
+  private applyGunMod(id: string) {
+    const [, modId, wIdx] = id.split(":");
+    const wi = parseInt(wIdx, 10);
+    const mid = modId as GunModId;
+    if (!this.gunMods[wi] || this.gunMods[wi][mid]) return;
+    this.gunMods[wi][mid] = true;
+    /* extended mag tops up the gun immediately */
+    if (mid === "mag") {
+      const w = WEAPONS[wi];
+      this.mags[wi] = Math.min(this.effMagSize(wi), this.mags[wi] + Math.round(w.magSize * 0.5));
+    }
+    this.refreshModVisuals();
+    const m = GUN_MODS.find((g) => g.id === mid);
+    this.onEvent({ type: "pickup", text: `${WEAPONS[wi].tag} · ${m?.name ?? mid} INSTALLED` });
   }
 
   private applyCard(id: string) {
@@ -2079,7 +2296,9 @@ export class FoundryGame {
     /* ---------- player movement ---------- */
     const sprint = this.keys.has("ShiftLeft") || this.keys.has("ShiftRight");
     const berserkSpd = this.berserk && this.hp < this.maxHp * 0.4 ? 1 + 0.15 * this.berserkBonus : 1;
-    const speed = (sprint ? 8.4 : 5.8) * (1 - 0.45 * this.aimAmt) * this.speedMul * berserkSpd * WEAPONS[this.weaponIdx].moveMul;
+    /* ext. mag lugs a little weight; a flashlight costs a touch of speed */
+    const modMove = (this.hasMod("mag") ? 0.95 : 1) * (this.hasMod("light") ? 0.97 : 1);
+    const speed = (sprint ? 8.4 : 5.8) * (1 - 0.45 * this.aimAmt) * this.speedMul * berserkSpd * WEAPONS[this.weaponIdx].moveMul * modMove;
     let ix = 0;
     let iz = 0;
     if (this.keys.has("KeyW") || this.keys.has("ArrowUp")) iz -= 1;
@@ -2129,7 +2348,7 @@ export class FoundryGame {
     /* gun sway spring gets an impulse from look velocity (damped while aiming).
        Heavier guns resist the flick: impulse response falls off ~1/√mass */
     const swDamp = 1 - 0.55 * this.aimAmt;
-    const swImp = 1 / Math.sqrt(this.rigSpec.massKg / 1.5);
+    const swImp = (1 / Math.sqrt(this.rigSpec.massKg / 1.5)) * this.modSwayMul();
     this.swayVX += this.mouseDX * 0.011 * swDamp * swImp;
     this.swayVY += this.mouseDY * 0.009 * swDamp * swImp;
     this.mouseDX = 0;
@@ -2181,6 +2400,7 @@ export class FoundryGame {
           /* the new gun brings its own ballistic spec; kill inherited motion */
           this.rigSpec = RECOIL_SPECS[this.weaponIdx];
           this.rig.softReset();
+          this.refreshModVisuals();
           this.wState = "raising";
           this.wT = 0.2;
         } else {
@@ -2196,7 +2416,7 @@ export class FoundryGame {
           this.mags[1]++;
           this.reserves[1]--;
           sfx.reload(1);
-          if (this.mags[1] >= w.magSize || this.reserves[1] <= 0) {
+          if (this.mags[1] >= this.effMagSize(1) || this.reserves[1] <= 0) {
             this.wState = "idle";
             sfx.reload(2);
           }
@@ -2204,7 +2424,7 @@ export class FoundryGame {
       } else {
         this.wT -= dt;
         if (this.wT <= 0) {
-          const take = Math.min(w.magSize - this.mags[this.weaponIdx], this.reserves[this.weaponIdx]);
+          const take = Math.min(this.effMagSize(this.weaponIdx) - this.mags[this.weaponIdx], this.reserves[this.weaponIdx]);
           this.mags[this.weaponIdx] += take;
           if (isFinite(this.reserves[this.weaponIdx])) this.reserves[this.weaponIdx] -= take;
           sfx.reload(2);
@@ -2401,13 +2621,13 @@ export class FoundryGame {
           this.hp = Math.min(this.maxHp, this.hp + 25);
           this.onEvent({ type: "pickup", text: "+25 HP" });
         } else if (p.kind === "shells") {
-          this.reserves[1] = Math.min(48, this.reserves[1] + 6);
+          this.reserves[1] = Math.min(this.reserveCap(1), this.reserves[1] + 6);
           this.onEvent({ type: "pickup", text: "+6 SHELLS" });
         } else if (p.kind === "para") {
-          this.reserves[2] = Math.min(144, this.reserves[2] + 20);
+          this.reserves[2] = Math.min(this.reserveCap(2), this.reserves[2] + 20);
           this.onEvent({ type: "pickup", text: "+20 ROUNDS 9×19" });
         } else if (p.kind === "nato") {
-          this.reserves[3] = Math.min(180, this.reserves[3] + 24);
+          this.reserves[3] = Math.min(this.reserveCap(3), this.reserves[3] + 24);
           this.onEvent({ type: "pickup", text: "+24 BELT 7.62" });
         }
         sfx.pickup(p.kind === "health" ? "health" : "ammo");
@@ -2747,14 +2967,19 @@ export class FoundryGame {
   /* enemies hear the shot — nearby raiders may sidestep, and a heavy blast
      interrupts telegraphed attacks (the shotgun is a parry) */
   private notifyShot(shotgun: boolean) {
+    /* suppressor muffles the report; a laser/light gives your position away */
+    const quiet = this.hasMod("suppressor");
+    const loud = this.hasMod("laser") || this.hasMod("light");
     for (const e of this.enemies) {
       if (e.state === "dead" || e.state === "rise") continue;
       const d = e.group.position.distanceTo(this.pos);
-      const rr = shotgun ? 7.5 : 4.2;
+      const rr = (shotgun ? 7.5 : 4.2) * (quiet ? 0.5 : 1);
       if (d > rr) continue;
-      const chance = shotgun
+      let chance = shotgun
         ? e.kind === "runner" ? 0.8 : e.kind === "scrapper" ? 0.5 : 0.25
         : e.kind === "runner" ? 0.3 : 0.15;
+      if (quiet) chance *= 0.5;
+      if (loud) chance *= 1.25;
       if (Math.random() >= chance) continue;
       const ex = e.group.position.x - this.pos.x;
       const ez = e.group.position.z - this.pos.z;
