@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { sfx } from "./audio";
 import { buildRaiderRig, updateRaiderAnim, WINDUP_TIME, type RaiderRig } from "./raider";
+import { RecoilRig, RECOIL_SPECS } from "./recoil";
 import { createRagdoll, impulseRagdoll, stepRagdoll, type Ragdoll } from "./ragdoll";
 import {
   floorTexture,
@@ -283,9 +284,13 @@ export class FoundryGame {
   private rackT = -1;
   private aimAmt = 0;
   private aiming = false;
-  private recoilYaw = 0;
-  private recoilSpring = 0;
-  private recoilSpringV = 0;
+  /* data-driven recoil rig — caliber/mass/bore-height/contact specs drive
+     every shot's climb, shove, drift, roll and settle (see recoil.ts) */
+  private rig = new RecoilRig();
+  private rigSpec = RECOIL_SPECS[0];
+  /* small view-space corrections so a braced gun tracks the target tighter */
+  private aimYaw = 0;
+  private aimPitch = 0;
   private gunLight: THREE.PointLight | null = null;
   private swayX = 0;
   private swayY = 0;
@@ -546,11 +551,10 @@ export class FoundryGame {
     this.shotsFired = 0;
     this.shotsHit = 0;
     this.trauma = 0;
-    this.recoilPitch = 0;
-    this.recoilYaw = 0;
-    this.recoilSpring = 0;
-    this.recoilSpringV = 0;
-    this.vmPush = 0;
+    this.rig.hardReset();
+    this.rigSpec = RECOIL_SPECS[0];
+    this.aimYaw = 0;
+    this.aimPitch = 0;
     for (const e of this.enemies) this.scene.remove(e.group);
     this.enemies = [];
     this.shootables = this.shootables.filter((m) => m.userData.hit?.kind !== "enemy");
