@@ -1265,26 +1265,138 @@ export class FoundryGame {
     if (this.moonLight) this.moonLight.intensity = 0.5 + Math.sin(t * 0.11) * 0.07;
   }
   private buildViewModels() {
-    const metal = new THREE.MeshLambertMaterial({ color: "#3d4248", flatShading: true });
+    /* ---- shared material rack: two-tone steel, walnut, polymer, olive, brass ---- */
+    const metal = new THREE.MeshLambertMaterial({ color: "#4a5058", flatShading: true });
     const darkMetal = new THREE.MeshLambertMaterial({ color: "#23262b", flatShading: true });
-    const wood = new THREE.MeshLambertMaterial({ color: "#5c3a22", flatShading: true });
-    const grip = new THREE.MeshLambertMaterial({ color: "#2e2117", flatShading: true });
+    const steel = new THREE.MeshLambertMaterial({ color: "#6a7078", flatShading: true });
+    const boltSteel = new THREE.MeshLambertMaterial({ color: "#565c63", flatShading: true });
+    const darkPoly = new THREE.MeshLambertMaterial({ color: "#2a2622", flatShading: true });
+    const blackPoly = new THREE.MeshLambertMaterial({ color: "#14120f", flatShading: true });
+    const gunBlack = new THREE.MeshLambertMaterial({ color: "#1c1f23", flatShading: true });
+    const wood = new THREE.MeshLambertMaterial({ color: "#6b4426", flatShading: true });
+    const woodLight = new THREE.MeshLambertMaterial({ color: "#7d5230", flatShading: true });
+    const darkWood = new THREE.MeshLambertMaterial({ color: "#4a2d17", flatShading: true });
+    const gripM = new THREE.MeshLambertMaterial({ color: "#2e2117", flatShading: true });
+    const rubber = new THREE.MeshLambertMaterial({ color: "#171412", flatShading: true });
+    const heavy = new THREE.MeshLambertMaterial({ color: "#33383e", flatShading: true });
+    const olive = new THREE.MeshLambertMaterial({ color: "#4a4f3c", flatShading: true });
+    const brass = new THREE.MeshLambertMaterial({ color: "#c9a24a", flatShading: true });
+    const amberBand = new THREE.MeshLambertMaterial({ color: "#b07a1c", flatShading: true });
+    const portDark = new THREE.MeshBasicMaterial({ color: "#0b0b0d" });
+    const amber = new THREE.MeshBasicMaterial({ color: "#ffb42e" });
+    const dotWhite = new THREE.MeshBasicMaterial({ color: "#d8d2c4" });
+    const redGlow = new THREE.MeshBasicMaterial({ color: "#ff2e1f" });
+    const B = (w: number, h: number, d: number, m: THREE.Material) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+    const C = (rt: number, rb: number, h: number, m: THREE.Material, s = 8) => {
+      const me = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, s), m);
+      me.rotation.x = Math.PI / 2;
+      return me;
+    };
+    const SP = (r: number, m: THREE.Material) => new THREE.Mesh(new THREE.SphereGeometry(r, 6, 6), m);
 
-    /* pistol */
+    /* ============ P-9 SCRAPLOCK — blued service pistol ============ */
     const pistol = new THREE.Group();
-    const slide = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.085, 0.34), metal);
+    const slide = B(0.075, 0.085, 0.34, metal);
     slide.position.set(0, 0.055, -0.08);
     pistol.add(slide);
-    const frame = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.06, 0.26), darkMetal);
+    /* cocking serrations ride on the slide so they reciprocate with it */
+    for (let i = 0; i < 5; i++)
+      for (const sx of [-1, 1]) {
+        const sr = B(0.004, 0.052, 0.011, darkMetal);
+        sr.position.set(0.0395 * sx, 0, 0.105 + i * 0.013);
+        slide.add(sr);
+      }
+    for (let i = 0; i < 2; i++)
+      for (const sx of [-1, 1]) {
+        const sr = B(0.004, 0.052, 0.011, darkMetal);
+        sr.position.set(0.0395 * sx, 0, -0.14 - i * 0.013);
+        slide.add(sr);
+      }
+    const slideTop = B(0.03, 0.008, 0.3, darkMetal);
+    slideTop.position.set(0, 0.046, 0);
+    slide.add(slideTop);
+    const extractor = B(0.006, 0.02, 0.05, darkMetal);
+    extractor.position.set(0.04, 0.012, 0.02);
+    slide.add(extractor);
+    const crownP = B(0.062, 0.062, 0.012, darkMetal);
+    crownP.position.set(0, 0, -0.172);
+    slide.add(crownP);
+    /* polymer frame + accessory rail */
+    const frame = B(0.065, 0.06, 0.26, darkPoly);
     frame.position.set(0, -0.01, -0.05);
     pistol.add(frame);
-    const gripP = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.16, 0.08), grip);
+    for (let i = 0; i < 3; i++) {
+      const notch = B(0.05, 0.008, 0.016, blackPoly);
+      notch.position.set(0, -0.043, -0.125 - i * 0.024);
+      pistol.add(notch);
+    }
+    /* trigger guard + blade */
+    const guardF = B(0.012, 0.05, 0.012, darkPoly);
+    guardF.position.set(0, -0.065, -0.085);
+    pistol.add(guardF);
+    const guardB = B(0.012, 0.055, 0.012, darkPoly);
+    guardB.position.set(0, -0.06, 0.0);
+    pistol.add(guardB);
+    const guardU = B(0.012, 0.012, 0.075, darkPoly);
+    guardU.position.set(0, -0.09, -0.04);
+    pistol.add(guardU);
+    const triggerBlade = B(0.008, 0.035, 0.02, steel);
+    triggerBlade.position.set(0, -0.055, -0.035);
+    triggerBlade.rotation.x = 0.2;
+    pistol.add(triggerBlade);
+    /* hammer, beavertail, thumb safety */
+    const hammerP = B(0.02, 0.04, 0.016, steel);
+    hammerP.position.set(0, 0.055, 0.1);
+    hammerP.rotation.x = -0.5;
+    pistol.add(hammerP);
+    const beaver = B(0.05, 0.02, 0.05, darkPoly);
+    beaver.position.set(0, 0.012, 0.1);
+    beaver.rotation.x = -0.35;
+    pistol.add(beaver);
+    const safetyL = B(0.008, 0.018, 0.05, steel);
+    safetyL.position.set(-0.037, 0.015, 0.03);
+    pistol.add(safetyL);
+    /* checkered walnut grip — bottom rakes back toward the shooter */
+    const gripP = B(0.06, 0.16, 0.08, wood);
     gripP.position.set(0, -0.1, 0.06);
-    gripP.rotation.x = -0.28; /* bottom of grip rakes back toward the shooter */
+    gripP.rotation.x = -0.28;
     pistol.add(gripP);
-    const sight = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.03, 0.02), darkMetal);
-    sight.position.set(0, 0.11, -0.22);
-    pistol.add(sight);
+    for (const sx of [-1, 1]) {
+      const panel = B(0.004, 0.11, 0.052, darkWood);
+      panel.position.set(0.0315 * sx, -0.01, 0);
+      gripP.add(panel);
+    }
+    for (let r = 0; r < 5; r++)
+      for (const sx of [-1, 1]) {
+        const line = B(0.005, 0.011, 0.052, woodLight);
+        line.position.set(0.0318 * sx, -0.052 + r * 0.026, 0);
+        gripP.add(line);
+      }
+    const screwP1 = B(0.006, 0.012, 0.012, steel);
+    screwP1.position.set(0.033, 0.03, 0.01);
+    gripP.add(screwP1);
+    const screwP2 = screwP1.clone();
+    screwP2.position.x = -0.033;
+    gripP.add(screwP2);
+    const baseP = B(0.056, 0.02, 0.076, darkMetal);
+    baseP.position.set(0, -0.192, 0.088);
+    baseP.rotation.x = -0.28;
+    pistol.add(baseP);
+    /* sights — rear dots + amber front blade */
+    const rearSight = B(0.05, 0.028, 0.02, darkMetal);
+    rearSight.position.set(0, 0.112, 0.06);
+    pistol.add(rearSight);
+    for (const sx of [-1, 1]) {
+      const dot = B(0.008, 0.008, 0.006, dotWhite);
+      dot.position.set(0.015 * sx, 0.12, 0.052);
+      pistol.add(dot);
+    }
+    const fSightP = B(0.016, 0.035, 0.018, darkMetal);
+    fSightP.position.set(0, 0.115, -0.23);
+    pistol.add(fSightP);
+    const fDotP = B(0.007, 0.007, 0.005, amber);
+    fDotP.position.set(0, 0.128, -0.233);
+    pistol.add(fDotP);
     const muzzleP = new THREE.Object3D();
     muzzleP.position.set(0, 0.055, -0.3);
     pistol.add(muzzleP);
@@ -1292,156 +1404,347 @@ export class FoundryGame {
     ejectP.position.set(0.055, 0.06, -0.06);
     pistol.add(ejectP);
 
-    /* shotgun */
+    /* ============ M870 BREAKER — walnut pump with a vent rib ============ */
     const shotgun = new THREE.Group();
-    const barrelS = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.78, 8), darkMetal);
-    barrelS.rotation.x = Math.PI / 2;
+    const barrelS = C(0.035, 0.035, 0.78, darkMetal, 10);
     barrelS.position.set(0, 0.05, -0.28);
     shotgun.add(barrelS);
-    const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.5, 8), metal);
-    tube.rotation.x = Math.PI / 2;
+    /* vent rib with a red bead up front, crown at the muzzle */
+    const ribS = B(0.014, 0.01, 0.58, blackPoly);
+    ribS.position.set(0, 0.092, -0.29);
+    shotgun.add(ribS);
+    const bead = SP(0.008, redGlow);
+    bead.position.set(0, 0.104, -0.56);
+    shotgun.add(bead);
+    const crownS = C(0.039, 0.039, 0.016, steel, 10);
+    crownS.position.set(0, 0.05, -0.668);
+    shotgun.add(crownS);
+    /* magazine tube: cap + knurled ring */
+    const tube = C(0.03, 0.03, 0.5, metal, 10);
     tube.position.set(0, -0.02, -0.2);
     shotgun.add(tube);
-    const pump = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.08, 0.16), wood);
+    const tubeCap = C(0.033, 0.033, 0.03, steel, 10);
+    tubeCap.position.set(0, -0.02, -0.46);
+    shotgun.add(tubeCap);
+    const tubeRing = C(0.034, 0.034, 0.02, darkMetal, 10);
+    tubeRing.position.set(0, -0.02, -0.36);
+    shotgun.add(tubeRing);
+    /* barrel band tying tube to barrel */
+    const bandS = B(0.02, 0.09, 0.02, darkMetal);
+    bandS.position.set(0, 0.015, -0.43);
+    shotgun.add(bandS);
+    /* ribbed walnut pump — the animated forend */
+    const pump = B(0.07, 0.08, 0.16, wood);
     pump.position.set(0, -0.02, -0.3);
     shotgun.add(pump);
-    const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.11, 0.24), metal);
+    for (let i = 0; i < 5; i++)
+      for (const sx of [-1, 1]) {
+        const groove = B(0.004, 0.062, 0.013, darkWood);
+        groove.position.set(0.0365 * sx, 0, -0.052 + i * 0.026);
+        pump.add(groove);
+      }
+    /* action bars back to the receiver */
+    const barL = C(0.006, 0.006, 0.22, steel, 6);
+    barL.position.set(-0.02, 0.03, 0.17);
+    shotgun.add(barL);
+    const barR = barL.clone();
+    barR.position.x = 0.02;
+    shotgun.add(barR);
+    /* receiver with ejection + loading ports */
+    const receiver = B(0.08, 0.11, 0.24, metal);
     receiver.position.set(0, 0.02, 0.12);
     shotgun.add(receiver);
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.12, 0.24), wood);
+    const port = B(0.012, 0.07, 0.1, portDark);
+    port.position.set(0.045, 0.02, 0.1);
+    shotgun.add(port);
+    const gateS = B(0.06, 0.012, 0.09, portDark);
+    gateS.position.set(0, -0.042, 0.14);
+    shotgun.add(gateS);
+    /* crossbolt safety + hammer */
+    const safetyS = B(0.016, 0.016, 0.012, redGlow);
+    safetyS.position.set(0, 0.005, 0.246);
+    shotgun.add(safetyS);
+    const hammerS = B(0.02, 0.03, 0.014, darkMetal);
+    hammerS.position.set(0, -0.02, 0.246);
+    shotgun.add(hammerS);
+    /* walnut stock: lighter comb, rubber pad, sling swivel */
+    const stock = B(0.065, 0.12, 0.24, wood);
     stock.position.set(0, -0.03, 0.34);
     stock.rotation.x = -0.15;
     shotgun.add(stock);
+    const comb = B(0.05, 0.02, 0.2, woodLight);
+    comb.position.set(0, 0.062, 0.01);
+    stock.add(comb);
+    const padS = B(0.069, 0.124, 0.02, rubber);
+    padS.position.set(0, 0, 0.125);
+    stock.add(padS);
+    const slingS = B(0.014, 0.02, 0.014, darkMetal);
+    slingS.position.set(0, -0.065, 0.1);
+    stock.add(slingS);
     const muzzleS = new THREE.Object3D();
     muzzleS.position.set(0, 0.05, -0.72);
     shotgun.add(muzzleS);
-    /* loading gate / ejection port on the receiver side */
-    const port = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.07, 0.1), new THREE.MeshBasicMaterial({ color: "#0b0b0d" }));
-    port.position.set(0.045, 0.02, 0.1);
-    shotgun.add(port);
 
-    /* VK-9 WESPE — western-block prototype SMG: stamped-steel box receiver,
-       grip magazine, open-bolt cover up top — bare receiver, no stock */
+    /* ============ VK-9 WESPE — stamped prototype SMG, grip-fed, no stock ============ */
     const smg = new THREE.Group();
-    const smgBody = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.1, 0.42), darkMetal);
+    const smgBody = B(0.085, 0.1, 0.42, darkMetal);
     smgBody.position.set(0, 0.03, -0.02);
     smg.add(smgBody);
-    const topCover = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.028, 0.4), metal);
+    /* stamped side panels + rivet lines */
+    for (const sx of [-1, 1]) {
+      const panelK = B(0.004, 0.06, 0.3, blackPoly);
+      panelK.position.set(0.045 * sx, 0.03, -0.02);
+      smg.add(panelK);
+    }
+    for (let i = 0; i < 6; i++) {
+      const rv = B(0.005, 0.008, 0.008, steel);
+      rv.position.set(i % 2 === 0 ? 0.0475 : -0.0475, i < 3 ? 0.062 : -0.004, -0.16 + (i % 3) * 0.14);
+      smg.add(rv);
+    }
+    /* fire selector lever on the left */
+    const selectorK = B(0.008, 0.05, 0.014, steel);
+    selectorK.position.set(-0.047, 0.02, 0.1);
+    selectorK.rotation.x = 0.6;
+    smg.add(selectorK);
+    /* top cover + stamped ribs */
+    const topCover = B(0.062, 0.028, 0.4, metal);
     topCover.position.set(0, 0.092, -0.03);
     smg.add(topCover);
-    /* stamped ribs along the receiver */
     for (let i = 0; i < 3; i++) {
-      const rib = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.012, 0.03), metal);
+      const rib = B(0.09, 0.012, 0.03, metal);
       rib.position.set(0, 0.0, -0.12 + i * 0.09);
       smg.add(rib);
     }
-    /* reciprocating bolt cover + charging handle */
-    const bolt = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, 0.1), new THREE.MeshLambertMaterial({ color: "#565c63", flatShading: true }));
+    /* reciprocating open-bolt cover (animated) with cocking serrations */
+    const bolt = B(0.05, 0.02, 0.1, boltSteel);
     bolt.position.set(0, 0.113, -0.12);
     smg.add(bolt);
-    const chgHandle = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.012, 0.07), darkMetal);
+    for (let i = 0; i < 3; i++)
+      for (const sx of [-1, 1]) {
+        const bs = B(0.004, 0.012, 0.008, darkMetal);
+        bs.position.set(0.027 * sx, 0, -0.024 + i * 0.024);
+        bolt.add(bs);
+      }
+    const chgHandle = B(0.012, 0.012, 0.07, darkMetal);
     chgHandle.position.set(0.045, 0.113, -0.12);
     smg.add(chgHandle);
-    /* barrel shroud + front sight */
-    const shroud = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.052, 0.2), metal);
+    const chgKnob = SP(0.011, steel);
+    chgKnob.position.set(0.085, 0.113, -0.12);
+    smg.add(chgKnob);
+    /* barrel shroud with cooling slots + end cap */
+    const shroud = B(0.052, 0.052, 0.2, metal);
     shroud.position.set(0, 0.045, -0.32);
     smg.add(shroud);
-    const fSight = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.045, 0.014), darkMetal);
-    fSight.position.set(0, 0.095, -0.4);
-    smg.add(fSight);
-    const muzzleK = new THREE.Object3D();
-    muzzleK.position.set(0, 0.045, -0.435);
-    smg.add(muzzleK);
-    /* grip with the magazine inside — the UZI silhouette */
-    const smgGrip = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.2, 0.08), new THREE.MeshLambertMaterial({ color: "#22262b", flatShading: true }));
+    for (let i = 0; i < 4; i++)
+      for (const sx of [-1, 1]) {
+        const slotK = B(0.004, 0.026, 0.022, portDark);
+        slotK.position.set(0.0275 * sx, 0, -0.066 + i * 0.044);
+        shroud.add(slotK);
+      }
+    const shroudCap = B(0.058, 0.058, 0.014, darkMetal);
+    shroudCap.position.set(0, 0, -0.1);
+    shroud.add(shroudCap);
+    /* barrel tip + crown past the shroud */
+    const tipK = C(0.016, 0.016, 0.06, darkMetal, 8);
+    tipK.position.set(0, 0.045, -0.43);
+    smg.add(tipK);
+    /* hooded front sight with an amber dot */
+    const fSightBase = B(0.04, 0.012, 0.02, darkMetal);
+    fSightBase.position.set(0, 0.078, -0.4);
+    smg.add(fSightBase);
+    for (const sx of [-1, 1]) {
+      const prong = B(0.008, 0.045, 0.014, darkMetal);
+      prong.position.set(0.016 * sx, 0.1, -0.4);
+      smg.add(prong);
+    }
+    const fPost = B(0.008, 0.03, 0.008, steel);
+    fPost.position.set(0, 0.098, -0.4);
+    smg.add(fPost);
+    const fDotK = B(0.005, 0.005, 0.004, amber);
+    fDotK.position.set(0, 0.116, -0.4);
+    smg.add(fDotK);
+    /* rear peep */
+    const rSight = B(0.05, 0.03, 0.02, darkMetal);
+    rSight.position.set(0, 0.095, 0.14);
+    smg.add(rSight);
+    for (const sx of [-1, 1]) {
+      const peep = B(0.012, 0.016, 0.008, portDark);
+      peep.position.set(0.019 * sx, 0.1, 0.132);
+      smg.add(peep);
+    }
+    /* grip magazine — witness holes, finger grooves, amber proof band */
+    const smgGrip = B(0.062, 0.2, 0.08, gunBlack);
     smgGrip.position.set(0, -0.09, 0.03);
     smgGrip.rotation.x = 0.14;
     smg.add(smgGrip);
-    const magBase = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.06, 0.07), darkMetal);
+    for (let i = 0; i < 3; i++)
+      for (const sx of [-1, 1]) {
+        const hole = B(0.004, 0.014, 0.014, portDark);
+        hole.position.set(0.0325 * sx, -0.04 + i * 0.045, 0);
+        smgGrip.add(hole);
+      }
+    for (let i = 0; i < 3; i++) {
+      const fg = B(0.05, 0.012, 0.012, blackPoly);
+      fg.position.set(0, -0.02 - i * 0.04, -0.042);
+      smgGrip.add(fg);
+    }
+    const magBand = B(0.064, 0.018, 0.082, amberBand);
+    magBand.position.set(0, -0.075, 0);
+    smgGrip.add(magBand);
+    const magBase = B(0.05, 0.06, 0.07, darkMetal);
     magBase.position.set(0, -0.21, 0.045);
     magBase.rotation.x = 0.14;
     smg.add(magBase);
-    /* rear sight + prototype tag */
-    const rSight = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 0.02), darkMetal);
-    rSight.position.set(0, 0.095, 0.14);
-    smg.add(rSight);
-    const tag = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.03, 0.09), new THREE.MeshBasicMaterial({ color: "#ffb42e" }));
+    /* two-part prototype tag + ejection port */
+    const tag = B(0.012, 0.03, 0.09, amber);
     tag.position.set(0.048, 0.03, 0.02);
     smg.add(tag);
-    /* ejection port */
-    const portK = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.05, 0.11), new THREE.MeshBasicMaterial({ color: "#0b0b0d" }));
+    const tagLine = B(0.003, 0.02, 0.06, portDark);
+    tagLine.position.set(0.055, 0.03, 0.02);
+    smg.add(tagLine);
+    const portK = B(0.012, 0.05, 0.11, portDark);
     portK.position.set(0.048, 0.05, -0.08);
     smg.add(portK);
+    const muzzleK = new THREE.Object3D();
+    muzzleK.position.set(0, 0.045, -0.435);
+    smg.add(muzzleK);
 
-    /* MG-7 HOG — belt-fed 7.62 general-purpose gun, M60/M2 lineage:
-       heavy receiver, long finned barrel, muzzle brake, left-side box feed */
+    /* ============ MG-7 HOG — belt-fed GPMG, M60/M2 lineage ============ */
     const mg = new THREE.Group();
-    const heavy = new THREE.MeshLambertMaterial({ color: "#33383e", flatShading: true });
-    const olive = new THREE.MeshLambertMaterial({ color: "#4a4f3c", flatShading: true });
-    /* receiver — beefier than the SMG */
-    const mgBody = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.13, 0.46), heavy);
+    /* receiver + olive top cover with a latch */
+    const mgBody = B(0.11, 0.13, 0.46, heavy);
     mgBody.position.set(0, 0.02, 0.02);
     mg.add(mgBody);
-    /* box-fed ammo drum hanging off the lower-left of the receiver */
-    const boxMag = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.22), olive);
+    const topMg = B(0.1, 0.03, 0.42, olive);
+    topMg.position.set(0, 0.095, 0.0);
+    mg.add(topMg);
+    const latchMg = B(0.03, 0.02, 0.03, darkMetal);
+    latchMg.position.set(0, 0.115, 0.16);
+    mg.add(latchMg);
+    /* side panels + rivet pattern */
+    for (const sx of [-1, 1]) {
+      const panMg = B(0.004, 0.09, 0.36, blackPoly);
+      panMg.position.set(0.057 * sx, 0.02, 0.0);
+      mg.add(panMg);
+    }
+    for (let i = 0; i < 8; i++) {
+      const rvMg = B(0.005, 0.008, 0.008, steel);
+      rvMg.position.set(i % 2 === 0 ? 0.059 : -0.059, i < 4 ? 0.06 : -0.02, -0.15 + (i % 4) * 0.1);
+      mg.add(rvMg);
+    }
+    /* amber ammo-counter window on the left panel */
+    const counter = B(0.004, 0.025, 0.05, amber);
+    counter.position.set(-0.059, 0.02, 0.12);
+    mg.add(counter);
+    /* box feed hanging off the lower-left: latches, band, stamped ribs, handle */
+    const boxMag = B(0.1, 0.12, 0.22, olive);
     boxMag.position.set(-0.105, -0.055, 0.04);
     mg.add(boxMag);
-    const boxLid = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.13, 0.23), heavy);
+    const boxLid = B(0.02, 0.13, 0.23, heavy);
     boxLid.position.set(-0.162, -0.055, 0.04);
     mg.add(boxLid);
-    /* feed chute angling up-right from the box into the receiver */
-    const chute = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.12), darkMetal);
+    for (let i = 0; i < 3; i++) {
+      const mgRib = B(0.104, 0.124, 0.014, darkMetal);
+      mgRib.position.set(-0.105, -0.055, -0.03 + i * 0.07);
+      mg.add(mgRib);
+    }
+    const boxLatch = B(0.014, 0.03, 0.03, steel);
+    boxLatch.position.set(-0.105, 0.012, 0.1);
+    mg.add(boxLatch);
+    const boxHandle = B(0.014, 0.02, 0.1, steel);
+    boxHandle.position.set(-0.178, -0.055, 0.04);
+    mg.add(boxHandle);
+    const boxBand = B(0.104, 0.124, 0.014, amberBand);
+    boxBand.position.set(-0.105, -0.055, 0.12);
+    mg.add(boxBand);
+    /* feed chute with a belt dangling out — brass-tipped links */
+    const chute = B(0.05, 0.05, 0.12, darkMetal);
     chute.position.set(-0.062, -0.005, 0.02);
     chute.rotation.z = 0.85;
     mg.add(chute);
-    /* long heavy barrel with cooling fins */
-    const barrelM = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.036, 0.62, 10), heavy);
-    barrelM.rotation.x = Math.PI / 2;
+    for (let i = 0; i < 4; i++) {
+      const link = B(0.05, 0.016, 0.02, steel);
+      link.position.set(-0.1 - i * 0.012, -0.14 - i * 0.05, -0.02 + i * 0.012);
+      link.rotation.z = 0.3 + i * 0.12;
+      mg.add(link);
+      const tipL = B(0.05, 0.008, 0.02, brass);
+      tipL.position.set(0, -0.012, 0);
+      link.add(tipL);
+    }
+    /* heavy finned barrel + change latch */
+    const barrelM = C(0.032, 0.036, 0.62, heavy, 10);
     barrelM.position.set(0, 0.045, -0.42);
     mg.add(barrelM);
-    for (let i = 0; i < 4; i++) {
-      const fin = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.012, 10), metal);
-      fin.rotation.x = Math.PI / 2;
-      fin.position.set(0, 0.045, -0.24 - i * 0.12);
+    for (let i = 0; i < 6; i++) {
+      const fin = C(0.042, 0.042, 0.012, metal, 10);
+      fin.position.set(0, 0.045, -0.2 - i * 0.08);
       mg.add(fin);
     }
-    /* gas tube under the barrel */
-    const gasTube = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.4, 8), darkMetal);
-    gasTube.rotation.x = Math.PI / 2;
+    const barLatch = B(0.02, 0.03, 0.02, steel);
+    barLatch.position.set(0.062, 0.045, -0.16);
+    mg.add(barLatch);
+    /* gas tube + folded bipod */
+    const gasTube = C(0.02, 0.02, 0.4, darkMetal, 8);
     gasTube.position.set(0, -0.01, -0.3);
     mg.add(gasTube);
-    /* muzzle brake */
-    const brake = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.1, 8), metal);
-    brake.rotation.x = Math.PI / 2;
-    brake.position.set(0, 0.045, -0.74);
-    mg.add(brake);
+    for (const sx of [-1, 1]) {
+      const leg = B(0.012, 0.012, 0.26, steel);
+      leg.position.set(0.03 * sx, -0.03, -0.4);
+      leg.rotation.x = 0.12;
+      leg.rotation.z = sx * 0.1;
+      mg.add(leg);
+      const foot = B(0.02, 0.012, 0.03, rubber);
+      foot.position.set(0.03 * sx, -0.03, -0.53);
+      mg.add(foot);
+    }
+    /* muzzle brake with vent slots */
+    const brakeM = C(0.04, 0.04, 0.1, metal, 8);
+    brakeM.position.set(0, 0.045, -0.74);
+    mg.add(brakeM);
     for (let i = 0; i < 3; i++) {
-      const slot = new THREE.Mesh(new THREE.BoxGeometry(0.082, 0.014, 0.016), new THREE.MeshBasicMaterial({ color: "#0b0b0d" }));
+      const slot = B(0.082, 0.014, 0.016, portDark);
       slot.position.set(0, 0.045, -0.715 - i * 0.03);
       mg.add(slot);
     }
-    /* front sight post + carrying handle */
-    const mgFSight = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.06, 0.014), darkMetal);
+    /* front sight + rubber-padded carrying handle */
+    const mgFSight = B(0.014, 0.06, 0.014, darkMetal);
     mgFSight.position.set(0, 0.1, -0.55);
     mg.add(mgFSight);
-    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.05, 0.14), heavy);
+    const handle = B(0.02, 0.05, 0.14, heavy);
     handle.position.set(0, 0.115, -0.35);
     mg.add(handle);
-    /* reciprocating bolt / charging handle on the side */
-    const mgBolt = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.03, 0.12), new THREE.MeshLambertMaterial({ color: "#565c63", flatShading: true }));
+    const handlePad = B(0.024, 0.012, 0.1, rubber);
+    handlePad.position.set(0, 0.145, -0.35);
+    mg.add(handlePad);
+    /* reciprocating bolt carrier (animated) with a charging knob */
+    const mgBolt = B(0.02, 0.03, 0.12, boltSteel);
     mgBolt.position.set(0.06, 0.02, 0.02);
     mg.add(mgBolt);
-    /* stock + pistol grip */
-    const mgStock = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.14, 0.26), olive);
+    const mgKnob = SP(0.013, steel);
+    mgKnob.position.set(0.075, 0.02, -0.03);
+    mgBolt.add(mgKnob);
+    /* olive stock: walnut cheek riser + rubber pad; grooved pistol grip */
+    const mgStock = B(0.08, 0.14, 0.26, olive);
     mgStock.position.set(0, -0.05, 0.36);
     mgStock.rotation.x = -0.12;
     mg.add(mgStock);
-    const mgGrip = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.14, 0.07), grip);
+    const cheekMg = B(0.07, 0.03, 0.16, wood);
+    cheekMg.position.set(0, 0.08, 0.0);
+    mgStock.add(cheekMg);
+    const padMg = B(0.084, 0.144, 0.02, rubber);
+    padMg.position.set(0, 0, 0.135);
+    mgStock.add(padMg);
+    const mgGrip = B(0.06, 0.14, 0.07, gripM);
     mgGrip.position.set(0, -0.1, 0.16);
     mgGrip.rotation.x = -0.22;
     mg.add(mgGrip);
-    /* ejection port */
-    const portM = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.06, 0.13), new THREE.MeshBasicMaterial({ color: "#0b0b0d" }));
+    for (let i = 0; i < 3; i++) {
+      const gg = B(0.062, 0.012, 0.012, blackPoly);
+      gg.position.set(0, -0.02 - i * 0.035, -0.036);
+      mgGrip.add(gg);
+    }
+    /* ejection port + muzzle anchor */
+    const portM = B(0.012, 0.06, 0.13, portDark);
     portM.position.set(0.06, 0.02, -0.04);
     mg.add(portM);
     const muzzleM = new THREE.Object3D();
@@ -1479,42 +1782,114 @@ export class FoundryGame {
     const black = new THREE.MeshLambertMaterial({ color: "#101215", flatShading: true });
     const sizes = [0.045, 0.06, 0.05, 0.055]; /* suppressor radius per gun */
 
+    const amberAt = new THREE.MeshLambertMaterial({ color: "#b07a1c", flatShading: true });
+    /* where each gun's extended feed hangs: pistol/smg grip mags, shotgun a
+       longer tube up front, the HOG a deeper left-side box */
+    const magPos: [number, number, number][] = [
+      [0, -0.26, 0.07],
+      [0, -0.02, -0.34],
+      [0, -0.27, 0.035],
+      [-0.105, -0.17, 0.04],
+    ];
+
     this.modVisuals = vms.map((vm, i) => {
       const muzzle = this.vmMuzzles[i];
       const rec: Record<GunModId, THREE.Object3D[]> = { suppressor: [], brake: [], mag: [], laser: [], light: [] };
+      const r = sizes[i];
+      const bx = (w: number, h: number, d: number, m: THREE.Material) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+      const cy = (rt: number, rb: number, h: number, m: THREE.Material, s = 10) => {
+        const me = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, s), m);
+        me.rotation.x = Math.PI / 2;
+        return me;
+      };
 
-      /* suppressor — a long baffle tube over the muzzle */
-      const supp = new THREE.Mesh(new THREE.CylinderGeometry(sizes[i], sizes[i] * 0.92, 0.3, 10), black);
-      supp.rotation.x = Math.PI / 2;
+      /* suppressor — baffle tube with machining rings and an end cap */
+      const supp = new THREE.Group();
+      const tube = cy(r, r * 0.92, 0.3, black);
+      supp.add(tube);
+      for (let k = 0; k < 4; k++) {
+        const ring = cy(r * 1.05, r * 1.05, 0.012, steel);
+        ring.position.z = -0.105 + k * 0.07;
+        supp.add(ring);
+      }
+      const cap = cy(r * 0.6, r * 0.6, 0.02, steel);
+      cap.position.z = -0.155;
+      supp.add(cap);
+      const suppBand = cy(r * 1.02, r * 1.02, 0.03, amberAt);
+      suppBand.position.z = 0.12;
+      supp.add(suppBand);
       supp.position.set(0, 0, -0.16);
       muzzle.add(supp);
       rec.suppressor.push(supp);
 
-      /* muzzle brake — a finned compensator */
+      /* muzzle brake — finned compensator with a crown and dark vents */
       const brake = new THREE.Group();
-      const body = new THREE.Mesh(new THREE.CylinderGeometry(sizes[i] * 1.25, sizes[i] * 1.25, 0.13, 8), steel);
-      body.rotation.x = Math.PI / 2;
+      const body = cy(r * 1.25, r * 1.25, 0.13, steel, 8);
       brake.add(body);
       for (let f = 0; f < 3; f++) {
-        const fin = new THREE.Mesh(new THREE.BoxGeometry(sizes[i] * 2.6, 0.014, 0.02), steel);
-        fin.position.set(0, 0, -0.045 + f * 0.045);
+        const fin = bx(r * 2.6, 0.014, 0.02, steel);
+        fin.position.z = -0.045 + f * 0.045;
         brake.add(fin);
+        const vent = bx(r * 2.3, 0.006, 0.012, new THREE.MeshBasicMaterial({ color: "#0b0b0d" }));
+        vent.position.z = -0.045 + f * 0.045;
+        brake.add(vent);
       }
+      const brCrown = cy(r * 1.3, r * 1.3, 0.014, dark);
+      brCrown.position.z = -0.07;
+      brake.add(brCrown);
       brake.position.set(0, 0, -0.08);
       muzzle.add(brake);
       rec.brake.push(brake);
 
-      /* extended mag — a longer feed hanging under the receiver */
-      const mag = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.24, 0.09), dark);
-      mag.position.set(0, -0.2, -0.05);
+      /* extended feed — shaped per gun so it reads as a real part */
+      const mag = new THREE.Group();
+      if (i === 1) {
+        /* shotgun: tube extension under the barrel */
+        mag.add(cy(0.031, 0.031, 0.24, dark));
+        const extCap = cy(0.034, 0.034, 0.02, steel);
+        extCap.position.z = -0.12;
+        mag.add(extCap);
+        const extBand = cy(0.033, 0.033, 0.02, amberAt);
+        extBand.position.z = 0.06;
+        mag.add(extBand);
+      } else if (i === 3) {
+        /* HOG: a deeper left-side box with latches */
+        mag.add(bx(0.1, 0.12, 0.22, dark));
+        const lidM = bx(0.02, 0.125, 0.23, steel);
+        lidM.position.set(-0.06, 0, 0);
+        mag.add(lidM);
+        const bandM = bx(0.104, 0.124, 0.014, amberAt);
+        bandM.position.set(0, 0, 0.1);
+        mag.add(bandM);
+      } else {
+        /* pistol/smg: a longer grip magazine with baseplate + band */
+        mag.add(bx(0.062, 0.17, 0.078, dark));
+        const plateM = bx(0.066, 0.02, 0.082, steel);
+        plateM.position.set(0, -0.095, 0);
+        mag.add(plateM);
+        const bandP = bx(0.064, 0.018, 0.08, amberAt);
+        bandP.position.set(0, 0.05, 0);
+        mag.add(bandP);
+      }
+      mag.position.set(magPos[i][0], magPos[i][1], magPos[i][2]);
       vm.add(mag);
       rec.mag.push(mag);
 
-      /* laser — emitter block + a faint red beam downrange */
+      /* laser — rail clamp, emitter with windage dial, faint red beam */
       const laser = new THREE.Group();
-      const emitter = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.05, 0.09), black);
+      const clamp = bx(0.03, 0.02, 0.05, steel);
+      clamp.position.set(0, -0.052, -0.02);
+      laser.add(clamp);
+      const emitter = bx(0.04, 0.05, 0.09, black);
       emitter.position.set(0, -0.075, -0.02);
       laser.add(emitter);
+      const dial = cy(0.012, 0.012, 0.05, steel, 6);
+      dial.rotation.z = Math.PI / 2;
+      dial.position.set(0.032, -0.075, 0.01);
+      laser.add(dial);
+      const lensL = new THREE.Mesh(new THREE.SphereGeometry(0.008, 6, 6), new THREE.MeshBasicMaterial({ color: "#ff3020" }));
+      lensL.position.set(0, -0.075, -0.066);
+      laser.add(lensL);
       const beamGeo = new THREE.BufferGeometry().setFromPoints([
         new THREE.Vector3(0, -0.075, -0.07),
         new THREE.Vector3(0, -0.075, -30),
@@ -1527,15 +1902,21 @@ export class FoundryGame {
       muzzle.add(laser);
       rec.laser.push(laser);
 
-      /* flashlight — torch body + a volumetric cone (real light added to camera) */
+      /* flashlight — knurled torch, warm lens, volumetric spill cone */
       const light = new THREE.Group();
-      const torch = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.038, 0.12, 8), dark);
-      torch.rotation.x = Math.PI / 2;
+      const torch = cy(0.032, 0.038, 0.12, dark, 8);
       torch.position.set(0, -0.08, -0.05);
       light.add(torch);
-      const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.012, 8), new THREE.MeshBasicMaterial({ color: "#fff3c4" }));
-      lens.rotation.x = Math.PI / 2;
-      lens.position.set(0, -0.08, -0.11);
+      for (let k = 0; k < 2; k++) {
+        const knurl = cy(0.037, 0.037, 0.012, steel, 8);
+        knurl.position.set(0, -0.08, -0.02 - k * 0.045);
+        light.add(knurl);
+      }
+      const tail = bx(0.03, 0.03, 0.02, steel);
+      tail.position.set(0, -0.08, 0.02);
+      light.add(tail);
+      const lens = cy(0.03, 0.03, 0.012, new THREE.MeshBasicMaterial({ color: "#fff3c4" }), 8);
+      lens.position.set(0, -0.08, -0.112);
       light.add(lens);
       const cone = new THREE.Mesh(
         new THREE.CylinderGeometry(0.02, 0.9, 8, 14, 1, true),
