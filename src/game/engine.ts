@@ -245,7 +245,6 @@ export class FoundryGame {
   private skillLevels: Record<string, number> = {};
   private bobT = 0;
   private bobY = 0;
-  private recoilPitch = 0;
   private trauma = 0;
   private fovKick = 0;
   private lastLandVy = 0;
@@ -273,8 +272,6 @@ export class FoundryGame {
   private vmGroups: THREE.Group[] = [];
   private vmMuzzles: THREE.Object3D[] = [];
   private vmBase = new THREE.Vector3(0.3, -0.28, -0.55);
-  private vmKick = 0;
-  private vmPush = 0;
   private vmSlide: THREE.Mesh | null = null;
   private vmPump: THREE.Mesh | null = null;
   private vmBolt: THREE.Mesh | null = null;
@@ -581,10 +578,6 @@ export class FoundryGame {
     this.slideT = 0;
     this.pumpT = -1;
     this.rackT = -1;
-    this.recoilYaw = 0;
-    this.recoilSpring = 0;
-    this.recoilSpringV = 0;
-    this.vmPush = 0;
     this.startIntermission();
   }
 
@@ -1677,28 +1670,13 @@ export class FoundryGame {
     this.shotsFired++;
     /* heavy MG barrel heats slower; SMG runs hottest per second */
     this.heat = Math.min(1, this.heat + (this.weaponIdx === 0 ? 0.36 : this.weaponIdx === 3 ? 0.22 : 0.5));
-    /* ---- recoil: a springy camera climb that overshoots back to rest, a
-         damped snap and slight horizontal drift — every shot rolls its own
-         magnitude, and bracing (ADS) soaks ~35% of it. The viewmodel kick
-         is deliberately left at full strength ---- */
-    const kickVar = 0.85 + Math.random() * 0.6; /* 85%–145% power per shot */
-    const brace = 1 - 0.35 * this.aimAmt;
-    const totalKick = w.kick * kickVar * brace;
-    /* springy climb — an upward impulse the spring carries back past rest.
-       The HOG beds into the shoulder, so its muzzle barely levers up. */
-    const climbMul = this.weaponIdx === 3 ? 0.3 : 1;
-    this.recoilSpringV += totalKick * 26 * climbMul;
-    const sideKick = (Math.random() - 0.5) * 2 * totalKick * (this.weaponIdx === 1 ? 0.7 : 0.52);
-    this.yaw += sideKick * 0.3;
-    /* damped visual snap — the HOG barely snaps the muzzle up */
-    this.recoilPitch += totalKick * 0.42 * climbMul;
-    this.recoilYaw += sideKick * 0.45;
-    this.fovKick += w.fovPunch * (0.6 + Math.random() * 0.4);
-    this.vmKick = (this.weaponIdx === 1 ? 0.19 : this.weaponIdx === 3 ? 0.05 : 0.085) * kickVar;
-    /* the HOG's energy goes straight back into the shoulder — a heavy shove
-       with a jolt, not a muzzle flip */
-    this.vmPush = this.weaponIdx === 3 ? 0.15 * kickVar : 0;
-    this.trauma = Math.min(1.4, this.trauma + (this.weaponIdx === 1 ? 0.26 : this.weaponIdx === 3 ? 0.12 : 0.08) * kickVar);
+    /* ---- data-driven recoil (see recoil.ts): the gun's caliber, mass,
+       bore height and body contact points solve the impulse — climb torque
+       J·h/I, shoulder shove J/M, yaw/roll/drift from the gun's recoil
+       velocity — then springs carry every axis back to rest ---- */
+    this.yaw += this.rig.fire(this.rigSpec, this.aimAmt);
+    this.fovKick += this.rigSpec.fovGain * this.rig.variance * (0.6 + Math.random() * 0.4);
+    this.trauma = Math.min(1.4, this.trauma + this.rigSpec.traumaGain * this.rig.variance);
     if (this.weaponIdx === 0) this.slideT = 1;
     else if (this.weaponIdx === 1) this.pumpT = 0;
     else this.slideT = 1; /* open bolt reciprocates like the pistol slide */
@@ -2112,7 +2090,7 @@ export class FoundryGame {
     this.mouseDY = 0;
 
     /* apply view immediately so firing rays match the on-screen aim */
-    this.camera.rotation.set(this.pitch + this.recoilPitch, this.yaw, 0);
+    this.camera.rotation.set(this.pitch + this.rig.pitch + this.aimPitch, this.yaw + this.rig.yaw + this.aimYaw, 0);
     this.camera.position.set(this.pos.x, 1.66 + this.pos.y + this.bobY, this.pos.z);
 
     /* head bob + footsteps */
@@ -2135,14 +2113,13 @@ export class FoundryGame {
     /* ---------- weapons ---------- */
     this.fireCd -= dt;
     this.heat = Math.max(0, this.heat - dt * 0.85);
-    this.recoilPitch *= Math.exp(-10 * dt);
-    this.recoilYaw *= Math.exp(-9 * dt);
-    /* underdamped spring — the climb swings up, overshoots rest, and settles */
-    this.recoilSpringV += (-110 * this.recoilSpring - 10 * this.recoilSpringV) * dt;
-    this.recoilSpring += this.recoilSpringV * dt;
+    /* recoil rig — every axis is an under-damped spring settling to rest */
+    this.rig.update(dt, this.rigSpec, this.aimAmt);
+    /* a braced gun fights the kick: the sight picture tracks the target
+       tighter by partially cancelling the snap while aimed */
+    this.aimYaw = -this.rig.yaw * this.aimAmt * 0.8;
+    this.aimPitch = -this.rig.pitch * this.aimAmt * 0.35;
     this.fovKick *= Math.exp(-8 * dt);
-    this.vmKick *= Math.exp(-14 * dt);
-    this.vmPush *= Math.exp(-11 * dt);
     if (this.gunLight) this.gunLight.intensity = Math.max(1.1, this.gunLight.intensity * Math.exp(-16 * dt));
     this.comboT -= dt;
     if (this.comboT <= 0) this.combo = 0;
@@ -2154,6 +2131,9 @@ export class FoundryGame {
         if (this.wState === "lowering") {
           this.weaponIdx = this.pendingWeapon;
           for (let i = 0; i < this.vmGroups.length; i++) this.vmGroups[i].visible = i === this.weaponIdx;
+          /* the new gun brings its own ballistic spec; kill inherited motion */
+          this.rigSpec = RECOIL_SPECS[this.weaponIdx];
+          this.rig.softReset();
           this.wState = "raising";
           this.wT = 0.2;
         } else {
@@ -2228,12 +2208,15 @@ export class FoundryGame {
     const baseY = this.vmBase.y * (1 - aim) + -0.165 * aim;
     const baseZ = this.vmBase.z * (1 - aim) + -0.34 * aim;
     const idleAmp = 1 - aim * 0.85;
-    let vy = baseY + this.bobY * 0.6 * idleAmp + Math.sin(this.bobT) * bobAmp * 0.6 * idleAmp - swY * 0.4 - this.vmPush * 0.3;
+    /* recoil rig drives the gun body: shove into the shoulder, muzzle lever,
+       horizontal snap and barrel torque — the horizon itself never rolls */
+    const rigPush = Math.min(this.rig.push * 1.5, 0.26);
+    let vy = baseY + this.bobY * 0.6 * idleAmp + Math.sin(this.bobT) * bobAmp * 0.6 * idleAmp - swY * 0.4 - this.rig.drop;
     let vx = baseX + Math.sin(this.bobT * 0.5) * bobAmp * 0.4 * idleAmp + swX * 0.45;
-    let vz = baseZ + this.vmKick + this.vmPush + swY * 0.12;
-    let vrx = this.vmKick * 2.2 + swY * 1.1;
-    let vry = -swX * 0.9 + this.recoilYaw * 6;
-    let vrz = Math.sin(this.bobT) * bobAmp * 0.3 * idleAmp + swX * 0.5;
+    let vz = baseZ + rigPush + swY * 0.12;
+    let vrx = this.rig.pitch * 2.2 + swY * 1.1;
+    let vry = -swX * 0.9 + this.rig.yaw * 6;
+    let vrz = Math.sin(this.bobT) * bobAmp * 0.3 * idleAmp + swX * 0.5 + this.rig.roll * 2.5;
 
     if (this.wState === "lowering") vy -= 0.35 * (1 - this.wT / 0.16);
     if (this.wState === "raising") vy -= 0.35 * (this.wT / 0.2);
@@ -2395,7 +2378,7 @@ export class FoundryGame {
     this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 9);
     this.camera.updateProjectionMatrix();
     this.camera.position.set(this.pos.x + shX, 1.66 + this.pos.y + this.bobY + shY, this.pos.z);
-    this.camera.rotation.set(this.pitch + this.recoilPitch + this.recoilSpring, this.yaw + this.recoilYaw, shR);
+    this.camera.rotation.set(this.pitch + this.rig.pitch + this.aimPitch, this.yaw + this.rig.yaw + this.aimYaw, shR);
 
     /* ---------- HUD ---------- */
     const alive = this.enemies.filter((e) => e.state !== "dead").length + this.spawnQueue.length;

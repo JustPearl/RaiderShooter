@@ -69,18 +69,19 @@ export const RECOIL_SPECS: RecoilSpec[] = [
     impulseNs: 3.2,
     climbFactor: 0.75,
     pushFactor: 0.25,
-    stanceRot: 0.887,
-    stancePush: 1.076,
-    yawC: 0.000371,
-    rollC: 0.000247,
-    driftC: 0.0000445,
-    dropC: 0.000891,
+    /* targets: 3.5° climb, 0.07 shove, ±0.004 yaw snap, ±0.02 roll, ±0.0025 drift, 0.025 dip */
+    stanceRot: 0.936,
+    stancePush: 7.8,
+    yawC: 0.0368,
+    rollC: 0.1258,
+    driftC: 0.0000247,
+    dropC: 0.0987,
     traumaGain: 0.08,
     fovGain: 1.2,
     pitchWn: 13,
     pitchZeta: 0.5,
     pushWn: 11,
-    pushZeta: 0.8,
+    pushZeta: 0.3,
     /* one hand under the bore — everything becomes muzzle flip */
     contacts: [
       { name: "wrist", stiffness: 0.8, shoulder: false },
@@ -96,18 +97,19 @@ export const RECOIL_SPECS: RecoilSpec[] = [
     impulseNs: 13.0,
     climbFactor: 0.5,
     pushFactor: 0.8,
-    stanceRot: 1.353,
-    stancePush: 0.441,
-    yawC: 0.000719,
-    rollC: 0.00048,
-    driftC: 0.0000785,
-    dropC: 0.003269,
+    /* targets: 8° climb, 0.23 shove, ±0.012 yaw snap, ±0.05 roll, ±0.006 drift, 0.075 dip */
+    stanceRot: 4.1,
+    stancePush: 3.09,
+    yawC: 0.0972,
+    rollC: 0.276,
+    driftC: 0.0000523,
+    dropC: 0.2608,
     traumaGain: 0.26,
     fovGain: 5.0,
     pitchWn: 12,
     pitchZeta: 0.55,
     pushWn: 10,
-    pushZeta: 0.85,
+    pushZeta: 0.35,
     /* stock in the shoulder anchors the rear — a heavy shove with real roll */
     contacts: [
       { name: "shoulder", stiffness: 0.7, shoulder: true },
@@ -124,18 +126,19 @@ export const RECOIL_SPECS: RecoilSpec[] = [
     impulseNs: 2.7,
     climbFactor: 0.4,
     pushFactor: 0.4,
-    stanceRot: 8.488,
-    stancePush: 0.972,
-    yawC: 0.000833,
-    rollC: 0.000556,
-    driftC: 0.0000556,
-    dropC: 0.001111,
+    /* targets: 1.6° climb, 0.06 shove, ±0.003 yaw snap, ±0.015 roll, ±0.0012 drift, 0.012 dip */
+    stanceRot: 2.94,
+    stancePush: 17.1,
+    yawC: 0.1033,
+    rollC: 0.3522,
+    driftC: 0.0000444,
+    dropC: 0.1773,
     traumaGain: 0.05,
     fovGain: 0.5,
     pitchWn: 14,
     pitchZeta: 0.48,
     pushWn: 12,
-    pushZeta: 0.75,
+    pushZeta: 0.3,
     /* grip-mass design: bore nearly in line with the hands — a light buzz */
     contacts: [
       { name: "grip hand", stiffness: 0.65, shoulder: false },
@@ -151,18 +154,19 @@ export const RECOIL_SPECS: RecoilSpec[] = [
     impulseNs: 8.0,
     climbFactor: 0.15,
     pushFactor: 0.95,
+    /* targets: 1.7° climb, 0.21 shove, ±0.005 yaw snap, ±0.025 roll, ±0.002 drift, 0.02 dip */
     stanceRot: 30.94,
-    stancePush: 2.488,
-    yawC: 0.001313,
-    rollC: 0.000875,
+    stancePush: 11.8,
+    yawC: 0.2034,
+    rollC: 0.6935,
     driftC: 0.0000875,
-    dropC: 0.009844,
+    dropC: 0.349,
     traumaGain: 0.12,
     fovGain: 1.0,
     pitchWn: 12.5,
     pitchZeta: 0.62,
     pushWn: 9,
-    pushZeta: 0.9,
+    pushZeta: 0.4,
     /* bedded into the shoulder with a cheek weld — energy goes straight
        back into the body, the muzzle barely levers up */
     contacts: [
@@ -265,7 +269,7 @@ export class RecoilRig {
       this.spring(o, "push", "pushV", spec.pushWn, spec.pushZeta + zBoost * 0.5, h);
       this.spring(o, "yaw", "yawV", 16, 0.7, h);
       this.spring(o, "roll", "rollV", 15, 0.6, h);
-      this.spring(o, "drop", "dropV", 10, 0.8, h);
+      this.spring(o, "drop", "dropV", 10, 0.5, h);
     }
   }
 
