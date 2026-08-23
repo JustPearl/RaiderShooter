@@ -350,6 +350,11 @@ export class FoundryGame {
   private gateLights: THREE.PointLight[] = [];
   private swipes: { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; life: number; base: number }[] = [];
   private swipeGeo: THREE.RingGeometry | null = null;
+  /* enemy projectiles — pooled tracer streaks with real travel time */
+  private bullets: { mesh: THREE.Mesh; mat: THREE.MeshBasicMaterial; life: number }[] = [];
+  private bFrom: Float32Array = new Float32Array(0);
+  private bDir: Float32Array = new Float32Array(0);
+  private bSpd: Float32Array = new Float32Array(0);
   private lastRunnerDir = 1;
   private shells: { mesh: THREE.Mesh; vel: THREE.Vector3; spin: THREE.Vector3; life: number }[] = [];
 
@@ -611,6 +616,10 @@ export class FoundryGame {
     for (const s of this.shells) {
       s.life = 0;
       s.mesh.visible = false;
+    }
+    for (const b of this.bullets) {
+      b.life = 0;
+      b.mesh.visible = false;
     }
     this.aiming = false;
     this.aimAmt = 0;
@@ -1648,6 +1657,8 @@ export class FoundryGame {
       chargeDirZ: 0,
       chargeLocked: false,
       enraged: false,
+      burst: 0,
+      burstT: 0,
     };
     hitData.enemy = enemy;
     g.traverse((o) => {
@@ -2015,7 +2026,7 @@ export class FoundryGame {
 
   /* ============================== Player ============================== */
 
-  private damagePlayer(dmg: number, from?: THREE.Vector3) {
+  private damagePlayer(dmg: number, from?: THREE.Vector3, projectile = false) {
     if (this.phase !== "playing") return;
     this.hp = Math.max(0, this.hp - dmg * (1 - this.dmgResist));
     this.regenT = 0;
@@ -2066,7 +2077,8 @@ export class FoundryGame {
     const count = Math.min(6 + this.wave * 2 + Math.floor(this.wave * this.wave * 0.18), 26);
     const brutes = this.wave >= 3 ? Math.min(1 + Math.floor((this.wave - 3) / 2), 5) : 0;
     const runners = this.wave >= 2 ? Math.floor(count * 0.3) : 0;
-    const scrappers = Math.max(1, count - brutes - runners);
+    /* gunmen hold mid range — they join the fight from wave 2 */
+    const scrappers = this.wave >= 2 ? Math.max(1, count - brutes - runners) : 0;
     this.spawnQueue = [];
     for (let i = 0; i < scrappers; i++) this.spawnQueue.push("scrapper");
     for (let i = 0; i < runners; i++) this.spawnQueue.push("runner");
@@ -2653,6 +2665,7 @@ export class FoundryGame {
 
     this.updateFx(dt);
     this.updateSwipes(dt);
+    this.updateEnemyBullets(dt);
     this.updateShells(dt);
 
     /* ---------- camera ---------- */
@@ -2781,12 +2794,26 @@ export class FoundryGame {
       let moveZ: number;
       let moveMul = 1;
 
-      if (!canAttack && dist < orbitR + 1.4) {
+      if (e.kind === "scrapper") {
+        /* GUNNER: hold the shooting band and strafe, don't chase down */
+        const band = 8.5;
+        const radial = Math.max(-0.9, Math.min(0.9, (dist - band) * 0.9));
+        const strafe = Math.sin(e.wobble * 1.4 + e.orbitDir) * e.orbitDir;
+        moveX = tangX * strafe * 1.1 + dirX * radial;
+        moveZ = tangZ * strafe * 1.1 + dirZ * radial;
+        moveMul = 1;
+      } else if (!canAttack && dist < orbitR + 1.4) {
         /* denied the attack token — circle just out of reach, hunting an opening */
         const radial = Math.max(-0.85, Math.min(0.85, (dist - orbitR) * 0.8));
         moveX = tangX * 0.95 + dirX * radial;
         moveZ = tangZ * 0.95 + dirZ * radial;
         moveMul = 0.85;
+      } else if (e.kind === "runner") {
+        /* sprinter: close relentlessly — circling is only a brief weave */
+        const wob = Math.sin(e.wobble * 2.2) * 0.18;
+        moveX = dirX + -dirZ * wob;
+        moveZ = dirZ + dirX * wob;
+        moveMul = 1.1;
       } else if (e.style === "flank" && dist > e.range * 1.05) {
         /* sweep wide and come in from the side */
         const closeness = Math.max(0.3, Math.min(1, (dist - e.range) / 4));
@@ -2802,17 +2829,6 @@ export class FoundryGame {
       e.mvz = (moveZ / ml) * sp * moveMul;
       e.group.position.x += e.mvx * dt + e.kvx * dt;
       e.group.position.z += e.mvz * dt + e.kvz * dt;
-
-      /* scrapper feint — a fake jab to bait the player's dodge rhythm */
-      if (e.kind === "scrapper" && e.feintT <= 0 && e.feintCd <= 0 && e.attackCd > 0.45 && dist < e.range * 2.3 && Math.random() < dt * 0.55) {
-        e.feintT = 0.22;
-        e.feintCd = 2.6 + Math.random() * 3.2;
-      }
-      if (e.feintT > 0) {
-        e.feintT -= dt;
-        e.group.position.x += Math.sin(e.group.rotation.y) * 2.1 * dt;
-        e.group.position.z += Math.cos(e.group.rotation.y) * 2.1 * dt;
-      }
 
       e.walkT += dt * sp * 1.9;
 
@@ -2851,6 +2867,12 @@ export class FoundryGame {
       if (dist < e.range && canAttack) {
         e.state = "windup";
         e.stateT = 0;
+        if (e.kind === "scrapper") {
+          /* staggered group fire — each gun waits its turn, so volleys arrive
+             in waves instead of one wall of lead */
+          const gunsInVolley = this.enemies.filter((o) => o !== e && o.kind === "scrapper" && o.state !== "dead" && (o.state === "windup" || o.state === "strike")).length;
+          e.attackCd = 1.9 + Math.min(gunsInVolley, 3) * 0.35 + Math.random() * 0.8;
+        }
       } else if (e.kind === "brute" && this.wave >= 2 && e.attackCd <= 0 && tokens < this.maxAttackers() && dist > 5 && dist < 13.5) {
         /* bull rush from mid range */
         e.state = "charge";
@@ -2865,25 +2887,70 @@ export class FoundryGame {
       if (e.stateT >= WINDUP_TIME[e.kind] * windupMul) {
         e.state = "strike";
         e.stateT = 0;
-        sfx.swing();
-        this.spawnSwipe(e.group.position, Math.atan2(dx, dz), ENEMY_DEFS[e.kind].scale);
+        if (e.kind === "scrapper") {
+          e.burst = 3;
+          e.burstT = 0;
+        } else {
+          sfx.swing();
+          /* brutes get their big red arc on the impact frame instead */
+          this.spawnSwipe(e.group.position, Math.atan2(dx, dz), ENEMY_DEFS[e.kind].scale, false);
+        }
       }
     } else if (e.state === "strike") {
       e.stateT += dt;
-      /* pounce — runners close the gap mid-swing so backpedalling isn't free */
-      const lunge = e.kind === "runner" ? 9.5 : e.kind === "scrapper" ? 2.6 : 0;
-      if (lunge > 0 && e.stateT < 0.16) {
-        e.group.position.x += Math.sin(e.group.rotation.y) * lunge * dt;
-        e.group.position.z += Math.cos(e.group.rotation.y) * lunge * dt;
-        this.collideCircle(e.group.position, 0.45 * ENEMY_DEFS[e.kind].scale);
-      }
-      if (e.stateT >= 0.09 && e.stateT - dt < 0.09) {
-        /* impact frame */
-        if (dist < e.range * 1.25) this.damagePlayer(e.dmg, e.group.position);
-      }
-      if (e.stateT >= 0.4) {
-        e.attackCd = (e.kind === "brute" ? 1.5 : e.kind === "runner" ? 0.8 : 0.95) * (e.enraged ? 0.72 : 1);
-        e.state = "chase";
+      if (e.kind === "scrapper") {
+        /* burst fire — three quick scrap shots, accuracy improving per wave */
+        e.burstT -= dt;
+        if (e.burstT <= 0 && e.burst > 0) {
+          e.burst--;
+          e.burstT = 0.17;
+          const spreadMul = Math.max(0.45, 1 - (this.wave - 1) * 0.045);
+          this.spawnRaiderBullet(e, spreadMul);
+        }
+        if (e.burstT > 0.05) {
+          /* hold position while firing, tracking the target */
+          const targetRot = Math.atan2(dx, dz);
+          let dr = targetRot - e.group.rotation.y;
+          while (dr > Math.PI) dr -= Math.PI * 2;
+          while (dr < -Math.PI) dr += Math.PI * 2;
+          e.group.rotation.y += dr * Math.min(1, dt * 9);
+        }
+        if (e.burst <= 0 && e.burstT <= 0) {
+          e.state = "chase";
+        }
+      } else {
+        /* pounce — runners close the gap mid-swing so backpedalling isn't free */
+        const lunge = e.kind === "runner" ? 9.5 : 0;
+        if (lunge > 0 && e.stateT < 0.16) {
+          e.group.position.x += Math.sin(e.group.rotation.y) * lunge * dt;
+          e.group.position.z += Math.cos(e.group.rotation.y) * lunge * dt;
+          this.collideCircle(e.group.position, 0.45 * ENEMY_DEFS[e.kind].scale);
+        }
+        if (e.stateT >= 0.09 && e.stateT - dt < 0.09) {
+          /* impact frame */
+          if (e.kind === "brute") {
+            /* wide cleave — the maul's arc and its shockwave catch everything close */
+            this.spawnSwipe(e.group.position, e.group.rotation.y, ENEMY_DEFS.brute.scale, true);
+            this.trauma = Math.min(1.4, this.trauma + 0.32);
+            this.tmpV3.copy(e.group.position);
+            this.tmpV3.y += 0.12;
+            this.spawnParticles(this.tmpV3, 12, ["#4a3c2a", "#2a231b", "#8a7f70", "#ffb42e"], 3.0, 0.42, 7);
+            sfx.barrelClang();
+            if (dist < 3.4) {
+              this.damagePlayer(e.dmg, e.group.position);
+              /* the slam shoves you off your footing */
+              const sh = 1.0;
+              this.pos.x = Math.max(-30, Math.min(30, this.pos.x + (dx / dist) * sh));
+              this.pos.z = Math.max(-30, Math.min(30, this.pos.z + (dz / dist) * sh));
+            }
+          } else if (dist < e.range * 1.25) {
+            this.damagePlayer(e.dmg, e.group.position);
+          }
+        }
+        if (e.stateT >= 0.4) {
+          e.attackCd = (e.kind === "brute" ? 1.3 : 0.8) * (e.enraged ? 0.72 : 1);
+          e.state = "chase";
+        }
       }
     } else if (e.state === "charge") {
       e.stateT += dt;
@@ -3045,7 +3112,7 @@ export class FoundryGame {
   }
 
   /* melee swipe arc — a fading additive slash in front of the attacker */
-  private spawnSwipe(pos: THREE.Vector3, yaw: number, scale: number) {
+  private spawnSwipe(pos: THREE.Vector3, yaw: number, scale: number, wide = false) {
     if (!this.swipeGeo) this.swipeGeo = new THREE.RingGeometry(0.55, 1.05, 14, 1, -1.0, 2.0);
     let s = this.swipes.find((x) => x.life <= 0);
     if (!s) {
@@ -3063,12 +3130,109 @@ export class FoundryGame {
       s = { mesh, mat, life: 0, base: 1 };
       this.swipes.push(s);
     }
-    s.life = 0.13;
-    s.base = scale;
+    s.life = wide ? 0.2 : 0.13;
+    s.base = wide ? scale * 1.7 : scale;
+    s.mat.color.set(wide ? "#ff5a3c" : "#ffb066");
     s.mesh.visible = true;
-    s.mesh.position.set(pos.x + Math.sin(yaw) * 0.55 * scale, pos.y + 1.12 * scale, pos.z + Math.cos(yaw) * 0.55 * scale);
+    const reach = wide ? 1.15 : 0.55;
+    s.mesh.position.set(pos.x + Math.sin(yaw) * reach * scale, pos.y + 1.12 * scale, pos.z + Math.cos(yaw) * reach * scale);
     s.mesh.rotation.set(-0.35, yaw, Math.random() * 6.28);
-    s.mesh.scale.setScalar(0.6 * scale);
+    s.mesh.scale.setScalar(0.6 * s.base);
+  }
+
+  /* ============================== Enemy projectiles ============================== */
+
+  private spawnRaiderBullet(e: Enemy, spreadMul: number) {
+    if (!e.rig.muzzle) return;
+    let b = this.bullets.find((x) => x.life <= 0);
+    if (!b) {
+      if (this.bullets.length >= 18) return;
+      const mat = new THREE.MeshBasicMaterial({
+        color: "#ffd98f",
+        transparent: true,
+        opacity: 0.9,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.045, 0.9), mat);
+      this.scene.add(mesh);
+      b = { mesh, mat, life: 0 };
+      this.bullets.push(b);
+      this.bFrom = new Float32Array(this.bullets.length * 3);
+      this.bDir = new Float32Array(this.bullets.length * 3);
+      this.bSpd = new Float32Array(this.bullets.length);
+    }
+    const i = this.bullets.indexOf(b);
+    e.rig.muzzle.getWorldPosition(this.tmpV);
+    const ox = this.tmpV.x;
+    const oy = this.tmpV.y;
+    const oz = this.tmpV.z;
+    /* lead the target slightly, then smear with wave-scaled inaccuracy */
+    const tx = this.pos.x + this.vel.x * 0.22;
+    const ty = 1.35 + this.pos.y;
+    const tz = this.pos.z + this.vel.z * 0.22;
+    let dx = tx - ox;
+    let dy = ty - oy;
+    let dz = tz - oz;
+    const len = Math.hypot(dx, dy, dz) || 1;
+    dx /= len;
+    dy /= len;
+    dz /= len;
+    const sm = 0.13 * spreadMul;
+    dx += (Math.random() - 0.5) * sm;
+    dy += (Math.random() - 0.5) * sm * 0.6;
+    dz += (Math.random() - 0.5) * sm;
+    const dl = Math.hypot(dx, dy, dz) || 1;
+    this.bFrom[i * 3] = ox;
+    this.bFrom[i * 3 + 1] = oy;
+    this.bFrom[i * 3 + 2] = oz;
+    this.bDir[i * 3] = dx / dl;
+    this.bDir[i * 3 + 1] = dy / dl;
+    this.bDir[i * 3 + 2] = dz / dl;
+    this.bSpd[i] = 24;
+    b.life = 1.4;
+    b.mesh.visible = true;
+    b.mat.opacity = 0.9;
+    /* muzzle flash + report — these guns are loud enough to alert the room */
+    this.tmpV2.set(ox, oy, oz);
+    this.spawnParticles(this.tmpV2.clone(), 3, ["#ffd98f", "#ff9b3c"], 1.6, 0.14, 2);
+    sfx.raiderShot();
+  }
+
+  private updateEnemyBullets(dt: number) {
+    const headY = 1.66 + this.pos.y;
+    for (let i = 0; i < this.bullets.length; i++) {
+      const b = this.bullets[i];
+      if (b.life <= 0) continue;
+      b.life -= dt;
+      const dx = this.bDir[i * 3];
+      const dy = this.bDir[i * 3 + 1];
+      const dz = this.bDir[i * 3 + 2];
+      this.bFrom[i * 3] += dx * this.bSpd[i] * dt;
+      this.bFrom[i * 3 + 1] += dy * this.bSpd[i] * dt;
+      this.bFrom[i * 3 + 2] += dz * this.bSpd[i] * dt;
+      const x = this.bFrom[i * 3];
+      const y = this.bFrom[i * 3 + 1];
+      const z = this.bFrom[i * 3 + 2];
+      b.mesh.position.set(x, y, z);
+      b.mesh.lookAt(x + dx, y + dy, z + dz);
+      /* hit the player — a cylinder around the body */
+      const pdx = x - this.pos.x;
+      const pdz = z - this.pos.z;
+      if (pdx * pdx + pdz * pdz < 0.16 && y > 0.1 && y < headY + 0.25) {
+        this.damagePlayer(8, this.tmpV3.set(x, y, z), true);
+        this.trauma = Math.min(1.4, this.trauma + 0.06);
+        b.life = 0;
+      } else if (y < 0.05) {
+        /* sparks off the floor plates */
+        this.spawnParticles(this.tmpV3.set(x, 0.06, z).clone(), 3, ["#ffb42e", "#8a7f70"], 1.6, 0.16, 5);
+        b.life = 0;
+      } else if (Math.abs(x) > ARENA + 1 || Math.abs(z) > ARENA + 1) {
+        b.life = 0;
+      }
+      if (b.life <= 0) b.mesh.visible = false;
+      else b.mat.opacity = Math.min(0.9, b.life * 5);
+    }
   }
 
   private updateSwipes(dt: number) {
