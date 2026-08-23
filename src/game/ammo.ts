@@ -49,10 +49,10 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     referenceBarrelIn: 5.0,
     velGainPerIn: 12, /* fast-burning pistol powder — little left to give */
     energyJ: 350,
-    /* damage tracks real muzzle energy (E ∝ v²), anchored so the in-game
-       number equals the round's true stopping-power ratio. .45 is the
-       WEAKEST projectile here — 350 J next to the rifle's 3304 J. */
-    baseDamage: 24.9,
+    /* damage follows real muzzle energy but on a square-root curve so the
+       rifle's ~9× real-world advantage compresses to ~3× in-game. .45 is
+       the WEAKEST projectile here — 350 J next to the rifle's 3304 J. */
+    baseDamage: 24,
     knockback: 1.6,
     ragdollForce: 6,
     flashScale: 0.62,
@@ -68,7 +68,7 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     velGainPerIn: 26,
     energyJ: 519,
     /* 519 J — out-damages the .45 per projectile, as it should */
-    baseDamage: 30.8,
+    baseDamage: 29,
     knockback: 1.2,
     ragdollForce: 5,
     flashScale: 0.46,
@@ -84,7 +84,7 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     velGainPerIn: 20,
     energyJ: 310, /* per pellet */
     /* 310 J per pellet — nine of them is what makes it hurt */
-    baseDamage: 21.8,
+    baseDamage: 21,
     knockback: 2.5, /* per pellet — eight hits stack into a real shove */
     ragdollForce: 4,
     flashScale: 1.0,
@@ -99,9 +99,10 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     referenceBarrelIn: 20.0, /* M80 ball, 20" test barrel */
     velGainPerIn: 40, /* slow rifle powder — long barrels earn real speed */
     energyJ: 3304,
-    /* 3304 J — ~9.4× the .45. The most powerful projectile in the game,
-       and therefore the rarest to find. */
-    baseDamage: 222.7,
+    /* 3304 J — the most powerful projectile in the game, but on the same
+       sqrt curve as the others (~3× the .45, not the raw 9.4×) so a burst
+       hurts without vaporizing the room. Also the rarest drop. */
+    baseDamage: 68,
     knockback: 5.0,
     ragdollForce: 16,
     flashScale: 0.8,

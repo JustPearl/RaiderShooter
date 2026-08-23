@@ -1608,9 +1608,9 @@ export class FoundryGame {
      its supply. .45 is infinite so it never appears here. */
   private rollAmmoDrop(): PickupKind {
     const table: { kind: PickupKind; weight: number }[] = [
-      { kind: "shells", weight: 5.0 }, /* 22 dmg/pellet — plentiful */
-      { kind: "para", weight: 3.0 }, /* 37 dmg — uncommon */
-      { kind: "nato", weight: 0.8 }, /* 236 dmg — rare */
+      { kind: "shells", weight: 5.0 }, /* 21 dmg/pellet — plentiful */
+      { kind: "para", weight: 3.0 }, /* 29 dmg — uncommon */
+      { kind: "nato", weight: 0.8 }, /* 68 dmg — rare */
     ];
     let total = 0;
     for (const t of table) total += t.weight;
@@ -1635,9 +1635,16 @@ export class FoundryGame {
       c2.position.y = 0.18;
       g.add(c2);
     } else {
-      const box = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.3, 0.36), new THREE.MeshLambertMaterial({ color: "#8b6a2e", flatShading: true }));
+      /* per-cartridge supply crate — rarity reads in the paint */
+      const palette: Record<Exclude<PickupKind, "health">, { box: string; band: string }> = {
+        shells: { box: "#7a3324", band: "#ff6b4a" }, /* common — red shotgun box */
+        para: { box: "#5c6248", band: "#a8c46a" }, /* uncommon — olive 9mm crate */
+        nato: { box: "#3d4348", band: "#ffb42e" }, /* rare — dark 7.62 ammo can */
+      };
+      const c = palette[kind];
+      const box = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.3, 0.36), new THREE.MeshLambertMaterial({ color: c.box, flatShading: true }));
       g.add(box);
-      const band = new THREE.Mesh(new THREE.BoxGeometry(0.57, 0.1, 0.38), new THREE.MeshBasicMaterial({ color: "#ffb42e" }));
+      const band = new THREE.Mesh(new THREE.BoxGeometry(0.57, 0.1, 0.38), new THREE.MeshBasicMaterial({ color: c.band }));
       g.add(band);
     }
     g.position.set(at.x, 0.3, at.z);
@@ -2393,13 +2400,17 @@ export class FoundryGame {
         if (p.kind === "health") {
           this.hp = Math.min(this.maxHp, this.hp + 25);
           this.onEvent({ type: "pickup", text: "+25 HP" });
-        } else {
+        } else if (p.kind === "shells") {
           this.reserves[1] = Math.min(48, this.reserves[1] + 6);
+          this.onEvent({ type: "pickup", text: "+6 SHELLS" });
+        } else if (p.kind === "para") {
           this.reserves[2] = Math.min(144, this.reserves[2] + 20);
+          this.onEvent({ type: "pickup", text: "+20 ROUNDS 9×19" });
+        } else if (p.kind === "nato") {
           this.reserves[3] = Math.min(180, this.reserves[3] + 24);
-          this.onEvent({ type: "pickup", text: "+6 SHELLS // +20 ROUNDS // +24 BELT" });
+          this.onEvent({ type: "pickup", text: "+24 BELT 7.62" });
         }
-        sfx.pickup(p.kind);
+        sfx.pickup(p.kind === "health" ? "health" : "ammo");
         p.life = 0;
       }
     }
