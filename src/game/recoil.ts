@@ -179,6 +179,13 @@ export const RECOIL_SPECS: RecoilSpec[] = [
 
 /* ---------------- the simulated gun ---------------- */
 
+/**
+ * Global recoil intensity — scales every impulse the rig emits
+ * (climb, shove, yaw snap, roll, dip, aim drift). 1 = full physical
+ * solution, 1/3 = tuned-down arcade-real feel.
+ */
+export const RECOIL_INTENSITY = 1 / 3;
+
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 
 type SpringDOF = {
@@ -240,20 +247,21 @@ export class RecoilRig {
     const M = spec.massKg;
     const I = M * spec.radiusGyrationM * spec.radiusGyrationM;
 
+    const k = RECOIL_INTENSITY;
     /* muzzle-rise torque: ω = J·h·climb·absorb / I, coupled by stance */
-    this.pitchV += ((J * spec.boreHeightM * spec.climbFactor * rotAbsorb) / I) * spec.stanceRot;
+    this.pitchV += ((J * spec.boreHeightM * spec.climbFactor * rotAbsorb) / I) * spec.stanceRot * k;
     /* linear shove into the body: v = J·push·absorb / M */
-    this.pushV += ((J * spec.pushFactor * pushAbsorb) / M) * spec.stancePush;
+    this.pushV += ((J * spec.pushFactor * pushAbsorb) / M) * spec.stancePush * k;
 
     /* secondary axes — scale with the gun's own recoil velocity J/M */
     const vGun = J / M;
     const brace2 = 1 - 0.5 * aimAmt;
-    this.yawV += (Math.random() - 0.5) * 2 * vGun * spec.yawC * 8 * brace2;
-    this.rollV += (Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.random() * 0.5) * vGun * spec.rollC * 8 * brace2;
-    this.dropV += vGun * spec.dropC * 4 * braced;
+    this.yawV += (Math.random() - 0.5) * 2 * vGun * spec.yawC * 8 * brace2 * k;
+    this.rollV += (Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.random() * 0.5) * vGun * spec.rollC * 8 * brace2 * k;
+    this.dropV += vGun * spec.dropC * 4 * braced * k;
 
     /* permanent aim drift */
-    return (Math.random() - 0.5) * 2 * vGun * spec.driftC * 30;
+    return (Math.random() - 0.5) * 2 * vGun * spec.driftC * 30 * k;
   }
 
   /** Integrate every DOF as a damped spring back to rest. */

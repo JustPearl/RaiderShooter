@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { sfx } from "./audio";
 import { buildRaiderRig, updateRaiderAnim, WINDUP_TIME, type RaiderRig } from "./raider";
-import { RecoilRig, RECOIL_SPECS } from "./recoil";
+import { RecoilRig, RECOIL_SPECS, RECOIL_INTENSITY } from "./recoil";
 import { createRagdoll, impulseRagdoll, stepRagdoll, type Ragdoll } from "./ragdoll";
 import {
   floorTexture,
@@ -1675,8 +1675,8 @@ export class FoundryGame {
        J·h/I, shoulder shove J/M, yaw/roll/drift from the gun's recoil
        velocity — then springs carry every axis back to rest ---- */
     this.yaw += this.rig.fire(this.rigSpec, this.aimAmt);
-    this.fovKick += this.rigSpec.fovGain * this.rig.variance * (0.6 + Math.random() * 0.4);
-    this.trauma = Math.min(1.4, this.trauma + this.rigSpec.traumaGain * this.rig.variance);
+    this.fovKick += this.rigSpec.fovGain * this.rig.variance * RECOIL_INTENSITY * (0.6 + Math.random() * 0.4);
+    this.trauma = Math.min(1.4, this.trauma + this.rigSpec.traumaGain * this.rig.variance * RECOIL_INTENSITY);
     if (this.weaponIdx === 0) this.slideT = 1;
     else if (this.weaponIdx === 1) this.pumpT = 0;
     else this.slideT = 1; /* open bolt reciprocates like the pistol slide */
