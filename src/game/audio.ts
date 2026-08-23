@@ -17,8 +17,16 @@ export class SFX {
       comp.attack.value = 0.002;
       comp.release.value = 0.18;
       this.master = this.ctx.createGain();
-      this.master.gain.value = 0.5;
-      this.master.connect(comp);
+      this.master.gain.value = 0.62;
+      /* tuned for basic speakers: they can't move air below ~50Hz, and that
+         rumble only pumps the compressor and steals headroom from everything
+         audible — so it gets cut here, before dynamics processing */
+      const hpf = this.ctx.createBiquadFilter();
+      hpf.type = "highpass";
+      hpf.frequency.value = 48;
+      hpf.Q.value = 0.5;
+      this.master.connect(hpf);
+      hpf.connect(comp);
       comp.connect(this.ctx.destination);
       const len = this.ctx.sampleRate;
       this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
@@ -37,7 +45,7 @@ export class SFX {
     const f = this.ctx.createBiquadFilter();
     f.type = opts.type ?? "lowpass";
     f.frequency.setValueAtTime(opts.freq ?? 1200, t0);
-    if (opts.slideTo) f.frequency.exponentialRampToValueAtTime(Math.max(40, opts.slideTo), t0 + dur);
+    if (opts.slideTo) f.frequency.exponentialRampToValueAtTime(Math.max(60, opts.slideTo), t0 + dur);
     f.Q.value = opts.q ?? 0.8;
     const g = this.ctx.createGain();
     g.gain.setValueAtTime(opts.gain ?? 0.3, t0);
@@ -67,7 +75,7 @@ export class SFX {
     const o = this.ctx.createOscillator();
     o.type = opts.type ?? "sine";
     o.frequency.setValueAtTime(opts.freq ?? 440, t0);
-    if (opts.slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(20, opts.slideTo), t0 + dur);
+    if (opts.slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(45, opts.slideTo), t0 + dur);
     if (opts.detune) o.detune.value = opts.detune;
     const g = this.ctx.createGain();
     g.gain.setValueAtTime(opts.gain ?? 0.2, t0);
@@ -83,8 +91,9 @@ export class SFX {
     this.noise(0.085, { hp: 320, freq: 4800 * this.j(1), gain: this.j(0.5) });
     /* the "bang" — fixed mid-band body, no filter sweep (sweeps sound laser-y) */
     this.noise(0.075, { hp: 90, freq: 1050 * this.j(1), gain: this.j(0.38) });
-    /* chest thump */
-    this.tone(0.055, { type: "sine", freq: 148 * this.j(1), slideTo: 46, gain: this.j(0.3) });
+    /* chest thump — triangle so it carries harmonics small speakers reproduce */
+    this.tone(0.055, { type: "triangle", freq: 178 * this.j(1), slideTo: 68, gain: this.j(0.28) });
+    this.noise(0.05, { type: "bandpass", freq: 430, q: 1.4, gain: this.j(0.13) });
     /* slide: clack back, lock forward */
     this.noise(0.028, { type: "bandpass", freq: 1300 * this.j(1), q: 4.5, gain: 0.1, delay: 0.085 });
     this.noise(0.022, { type: "bandpass", freq: 860 * this.j(1), q: 4, gain: 0.08, delay: 0.13 });
@@ -100,7 +109,7 @@ export class SFX {
        impact, not laser. */
     this.noise(0.05, { hp: 340, freq: 4400 * this.j(1), gain: this.j(0.4) });
     this.noise(0.045, { hp: 110, freq: 1300 * this.j(1), gain: this.j(0.3) });
-    this.tone(0.04, { type: "sine", freq: 160 * this.j(1), slideTo: 58, gain: this.j(0.14) });
+    this.tone(0.04, { type: "triangle", freq: 195 * this.j(1), slideTo: 78, gain: this.j(0.13) });
     /* bolt clack trailing the crack */
     this.noise(0.02, { type: "bandpass", freq: 2150, q: 8, gain: 0.06, delay: 0.042 });
   }
@@ -109,12 +118,15 @@ export class SFX {
     /* crack — same band-limited impulse recipe, wider */
     this.noise(0.06, { hp: 260, freq: 4000 * this.j(1), gain: this.j(0.48) });
     /* the boom — this is the weight of it */
-    this.noise(0.32, { hp: 60, freq: 2600 * this.j(1), slideTo: 90, gain: this.j(0.78) });
+    this.noise(0.32, { hp: 60, freq: 2600 * this.j(1), slideTo: 115, gain: this.j(0.78) });
     /* heavy mid body — fixed cutoff, fast decay */
     this.noise(0.16, { hp: 120, freq: 900 * this.j(1), gain: this.j(0.42) });
-    /* deep thump + chamber resonance */
-    this.tone(0.28, { type: "sine", freq: 104 * this.j(1), slideTo: 28, gain: this.j(0.55) });
-    this.tone(0.17, { type: "triangle", freq: 64 * this.j(1), slideTo: 42, gain: 0.24, delay: 0.012 });
+    /* deep thump + chamber resonance — fundamentals raised into the band
+       basic speakers reproduce; the 280Hz punch below IS the chest-slam
+       you hear when the 30Hz would be inaudible */
+    this.tone(0.26, { type: "triangle", freq: 132 * this.j(1), slideTo: 52, gain: this.j(0.5) });
+    this.tone(0.15, { type: "triangle", freq: 88 * this.j(1), slideTo: 56, gain: 0.22, delay: 0.012 });
+    this.noise(0.13, { type: "bandpass", freq: 280, q: 1.1, gain: this.j(0.34) });
     /* spent shell hitting the floor plates a beat later */
     this.noise(0.05, { type: "bandpass", freq: 3100 * this.j(1), q: 8, gain: 0.07, delay: 0.17 });
     /* room reflection */
@@ -160,30 +172,32 @@ export class SFX {
   }
 
   kill() {
-    this.tone(0.22, { type: "sawtooth", freq: 220, slideTo: 48, gain: 0.16 });
-    this.noise(0.2, { freq: 700, slideTo: 90, gain: 0.24 });
+    this.tone(0.22, { type: "sawtooth", freq: 220, slideTo: 62, gain: 0.16 });
+    this.noise(0.2, { freq: 700, slideTo: 115, gain: 0.24 });
   }
 
   hurt() {
-    this.tone(0.16, { type: "square", freq: 150, slideTo: 55, gain: 0.3 });
-    this.noise(0.14, { type: "lowpass", freq: 800, gain: 0.3 });
+    this.tone(0.16, { type: "square", freq: 168, slideTo: 72, gain: 0.3 });
+    this.noise(0.14, { type: "lowpass", freq: 900, gain: 0.3 });
   }
 
   explosion() {
-    this.noise(0.7, { freq: 4200, slideTo: 40, gain: 0.95 });
-    this.tone(0.6, { type: "sine", freq: 90, slideTo: 24, gain: 0.75 });
-    this.noise(0.35, { type: "highpass", freq: 1200, slideTo: 200, gain: 0.3 });
+    this.noise(0.7, { freq: 4200, slideTo: 75, gain: 0.95 });
+    this.tone(0.55, { type: "triangle", freq: 118, slideTo: 44, gain: 0.62 });
+    /* the mid-band slam — what actually registers on small drivers */
+    this.noise(0.22, { type: "bandpass", freq: 380, q: 1, gain: 0.42 });
+    this.noise(0.35, { type: "highpass", freq: 1200, slideTo: 240, gain: 0.3 });
   }
 
   barrelClang() {
-    this.tone(0.14, { type: "square", freq: 340, slideTo: 90, gain: 0.18 });
+    this.tone(0.14, { type: "square", freq: 360, slideTo: 108, gain: 0.18 });
     this.noise(0.08, { type: "bandpass", freq: 900, q: 3, gain: 0.2 });
   }
 
   waveHorn() {
-    this.tone(0.5, { type: "sawtooth", freq: 96, slideTo: 144, gain: 0.22, detune: -12 });
-    this.tone(0.5, { type: "sawtooth", freq: 144, slideTo: 216, gain: 0.18, detune: 14, delay: 0.03 });
-    this.noise(0.6, { freq: 500, slideTo: 140, gain: 0.22 });
+    this.tone(0.5, { type: "sawtooth", freq: 108, slideTo: 162, gain: 0.22, detune: -12 });
+    this.tone(0.5, { type: "sawtooth", freq: 162, slideTo: 243, gain: 0.18, detune: 14, delay: 0.03 });
+    this.noise(0.6, { freq: 540, slideTo: 165, gain: 0.22 });
   }
 
   waveClear() {
@@ -203,15 +217,16 @@ export class SFX {
   }
 
   spawnRoar() {
-    this.tone(0.3, { type: "sawtooth", freq: 80, slideTo: 170, gain: 0.12 });
-    this.noise(0.25, { freq: 900, slideTo: 200, gain: 0.14 });
+    this.tone(0.3, { type: "sawtooth", freq: 98, slideTo: 185, gain: 0.12 });
+    this.noise(0.25, { freq: 900, slideTo: 220, gain: 0.14 });
   }
 
   step(sprint: boolean) {
     const now = performance.now();
     if (now - this.lastStep < 140) return;
     this.lastStep = now;
-    this.noise(0.06, { type: "lowpass", freq: sprint ? 420 : 300, gain: sprint ? 0.12 : 0.08 });
+    /* raised into the audible band — sub-400Hz footfalls vanish on laptops */
+    this.noise(0.06, { type: "lowpass", freq: sprint ? 560 : 400, gain: sprint ? 0.12 : 0.085 });
   }
 
   swing() {
