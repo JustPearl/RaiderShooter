@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { FoundryGame, type GameEvent, type HudData, type FinalStats, type GamePhase, type SkillCard, type ResMode, type AAMode } from "./game/engine";
 import { sfx } from "./game/audio";
+import { GUN_MODS, tierLabel, type GunModId } from "./game/gunmods";
 
 interface KillEntry {
   id: number;
@@ -82,6 +83,12 @@ export default function App() {
   const [draftCards, setDraftCards] = useState<SkillCard[] | null>(null);
   const [curWave, setCurWave] = useState(0);
   const [weapon, setWeapon] = useState(0);
+  const [locker, setLocker] = useState<{
+    owned: GunModId[];
+    tiers: Record<string, number>;
+    equipped: (GunModId | null)[];
+  } | null>(null);
+  const [lockerSel, setLockerSel] = useState(0);
 
   /* fast-path refs (updated every frame without re-render) */
   const hpFill = useRef<HTMLDivElement>(null);
@@ -167,6 +174,7 @@ export default function App() {
           setPhase("playing");
           setKillFeed([]);
           setDraftCards(null);
+          setLocker(null);
           break;
         case "paused":
           setPhase("paused");
@@ -174,6 +182,10 @@ export default function App() {
         case "draft":
           setDraftCards(e.cards);
           setPhase("draft");
+          break;
+        case "locker":
+          if (e.open) setLocker({ owned: e.owned as GunModId[], tiers: e.tiers, equipped: e.equipped as (GunModId | null)[] });
+          else setLocker(null);
           break;
         case "dead":
           setStats(e.stats);
@@ -600,6 +612,8 @@ export default function App() {
                   <span>RELOAD</span>
                   <div className="flex gap-1"><span className="keycap">1</span><span className="keycap">2</span><span className="keycap">3</span><span className="keycap">4</span><span className="keycap">WHEEL</span></div>
                   <span>SWAP WEAPON</span>
+                  <div className="flex gap-1"><span className="keycap">B</span></div>
+                  <span>GUN LOCKER — MOUNT LOOTED PARTS</span>
                   <div className="flex gap-1"><span className="keycap">ESC</span></div>
                   <span>PAUSE</span>
                 </div>
@@ -681,7 +695,7 @@ export default function App() {
       )}
 
       {/* ======= PAUSE ======= */}
-      {phase === "paused" && (
+      {phase === "paused" && !locker && (
         <div className="fixed inset-0 z-[55] flex items-center justify-center bg-[rgba(10,7,4,0.78)]" style={{ cursor: "crosshair" }}>
           <div className="hud-panel w-[420px] max-w-[92vw] px-8 py-8 text-center">
             <div className="hazard-tape mx-auto mb-5 h-[6px] w-40 opacity-80" />
@@ -711,10 +725,184 @@ export default function App() {
                 OPTIONS
               </button>
               <button
+                onClick={() => {
+                  sfx.ensure();
+                  sfx.uiMove();
+                  gameRef.current?.openLockerFromPause();
+                }}
+                className="menu-btn font-display border border-[rgba(255,180,46,0.5)] px-6 py-2.5 text-sm tracking-widest text-[#ffb42e] hover:border-[#ffb42e] hover:bg-[rgba(255,180,46,0.12)]"
+              >
+                GUN LOCKER [B]
+              </button>
+              <button
                 onClick={() => gameRef.current?.toAttract()}
                 className="menu-btn font-display border border-[rgba(184,168,143,0.4)] px-6 py-2.5 text-sm tracking-widest text-[#cdbfa8] hover:border-[#ffb42e] hover:text-[#ffb42e]"
               >
                 ABANDON POST
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======= GUN LOCKER ======= */}
+      {phase === "paused" && locker && (
+        <div className="fixed inset-0 z-[57] flex items-center justify-center bg-[rgba(8,6,3,0.88)]" style={{ cursor: "crosshair" }}>
+          <div className="pointer-events-none absolute inset-0 menu-grid opacity-40" />
+          <div className="relative w-[min(900px,94vw)]">
+            <div className="hud-panel px-8 py-6">
+              <div className="mb-1 flex items-baseline justify-between">
+                <div className="font-display text-2xl tracking-wide text-[#ff6b1a]">
+                  GUN <span className="text-[#ffb42e]">LOCKER</span>
+                </div>
+                <span className="text-[10px] font-semibold tracking-[0.25em] text-[#6e6353]">RAIDERS DROP PARTS — MOUNT THEM HERE</span>
+              </div>
+              <div className="hazard-tape mb-5 mt-2 h-[5px] opacity-80" />
+
+              <div className="grid grid-cols-1 gap-6 md:grid-cols-[280px_1fr]">
+                {/* weapon rack */}
+                <div>
+                  <div className="mb-2 font-display text-[11px] tracking-[0.3em] text-[#8a7f6c]">WEAPON RACK</div>
+                  <div className="flex flex-col gap-2">
+                    {["P-9 SCRAPLOCK", "M870 BREAKER", "VK-9 WESPE", "MG-7 HOG"].map((name, i) => {
+                      const eq = locker.equipped[i];
+                      const eqSpec = eq ? GUN_MODS.find((m) => m.id === eq) : null;
+                      const active = lockerSel === i;
+                      return (
+                        <button
+                          key={name}
+                          onClick={() => {
+                            sfx.uiMove();
+                            setLockerSel(i);
+                          }}
+                          className="group border px-4 py-3 text-left transition-all"
+                          style={{
+                            borderColor: active ? "#ff6b1a" : "rgba(184,168,143,0.22)",
+                            background: active ? "rgba(255,107,26,0.1)" : "rgba(0,0,0,0.3)",
+                            clipPath: "polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%)",
+                          }}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-display text-[12px] tracking-[0.14em]" style={{ color: active ? "#ffb42e" : "#cdbfa8" }}>
+                              {name}
+                            </span>
+                            <span className="keycap" style={{ minWidth: 22, height: 20, fontSize: 10 }}>{i + 1}</span>
+                          </div>
+                          <div className="mt-1 text-[10px] font-semibold tracking-[0.18em]">
+                            {eqSpec ? (
+                              <span style={{ color: eqSpec.rarity === "epic" ? "#ff2e1f" : "#ffb42e" }}>
+                                {eqSpec.short} · {tierLabel(locker.tiers[eqSpec.id] ?? 1)}
+                              </span>
+                            ) : (
+                              <span className="text-[#5a5142]">— EMPTY RAIL —</span>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-4 border border-[rgba(184,168,143,0.18)] bg-[rgba(0,0,0,0.3)] px-4 py-3 text-[10px] leading-relaxed tracking-[0.08em] text-[#8a7f6c]">
+                    ONE PART PER RAIL. A PART CAN ONLY RIDE ONE WEAPON — MOUNTING IT ELSEWHERE PULLS IT OFF.
+                  </div>
+                </div>
+
+                {/* stock + mount */}
+                <div>
+                  <div className="mb-2 flex items-baseline justify-between">
+                    <span className="font-display text-[11px] tracking-[0.3em] text-[#8a7f6c]">
+                      PARTS STOCK <span className="text-[#ffb42e]">({locker.owned.length})</span>
+                    </span>
+                    {locker.equipped[lockerSel] && (
+                      <button
+                        onClick={() => {
+                          sfx.uiMove();
+                          gameRef.current?.unequipMod(lockerSel);
+                        }}
+                        className="menu-btn border border-[rgba(255,46,31,0.5)] px-3 py-1 font-display text-[10px] tracking-[0.2em] text-[#ff2e1f] hover:bg-[rgba(255,46,31,0.15)]"
+                      >
+                        STRIP {GUN_MODS.find((m) => m.id === locker.equipped[lockerSel])?.short}
+                      </button>
+                    )}
+                  </div>
+
+                  {locker.owned.length === 0 ? (
+                    <div className="flex h-[220px] flex-col items-center justify-center border border-dashed border-[rgba(184,168,143,0.25)] text-center">
+                      <div className="font-display text-sm tracking-[0.3em] text-[#5a5142]">STOCK IS EMPTY</div>
+                      <div className="mt-2 max-w-[300px] text-[10px] leading-relaxed tracking-[0.12em] text-[#6e6353]">
+                        KILL RAIDERS TO LOOT GUN PARTS. HEAVIES DROP THEM MORE OFTEN. BRING THEM BACK HERE TO MOUNT.
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex max-h-[300px] flex-col gap-2 overflow-y-auto pr-1">
+                      {locker.owned.map((id) => {
+                        const spec = GUN_MODS.find((m) => m.id === id);
+                        if (!spec) return null;
+                        const tier = locker.tiers[id] ?? 1;
+                        const mountedHere = locker.equipped[lockerSel] === id;
+                        const mountedElsewhere = locker.equipped.some((e, i) => e === id && i !== lockerSel);
+                        const col = spec.rarity === "epic" ? "#ff2e1f" : "#ffb42e";
+                        return (
+                          <div
+                            key={id}
+                            className="border bg-[rgba(0,0,0,0.35)] px-4 py-3"
+                            style={{
+                              borderColor: mountedHere ? col : "rgba(184,168,143,0.2)",
+                              clipPath: "polygon(0 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%)",
+                            }}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-2.5">
+                                <span className="font-display text-[13px] tracking-[0.12em] text-[#ffe8c8]">{spec.name}</span>
+                                <span
+                                  className="px-1.5 py-0.5 font-display text-[9px] tracking-[0.14em]"
+                                  style={{ background: tier >= 2 ? "#ff6b1a" : "rgba(184,168,143,0.2)", color: tier >= 2 ? "#14100c" : "#cdbfa8" }}
+                                >
+                                  {tierLabel(tier)}
+                                </span>
+                              </div>
+                              {mountedHere ? (
+                                <span className="font-display text-[10px] tracking-[0.2em]" style={{ color: col }}>MOUNTED</span>
+                              ) : (
+                                <button
+                                  onClick={() => {
+                                    sfx.uiMove();
+                                    gameRef.current?.equipMod(lockerSel, id);
+                                  }}
+                                  className="menu-btn border px-3 py-1 font-display text-[10px] tracking-[0.2em] hover:text-[#14100c]"
+                                  style={{ borderColor: col, color: col }}
+                                  onMouseEnter={(ev) => ((ev.target as HTMLElement).style.background = col)}
+                                  onMouseLeave={(ev) => ((ev.target as HTMLElement).style.background = "transparent")}
+                                >
+                                  {mountedElsewhere ? "MOVE HERE" : "MOUNT"}
+                                </button>
+                              )}
+                            </div>
+                            <p className="mt-1.5 text-[10px] italic leading-snug tracking-[0.06em] text-[#8a7f6c]">{spec.desc}</p>
+                            <div className="mt-1.5 grid grid-cols-1 gap-x-4 gap-y-0.5 sm:grid-cols-2">
+                              {(spec.pros[tier - 1] ?? spec.pros[0]).map((p) => (
+                                <div key={p} className="flex items-start gap-1.5 text-[10px] font-semibold leading-snug text-[#7dff5e]">
+                                  <span>▲</span><span>{p}</span>
+                                </div>
+                              ))}
+                              {(spec.cons[tier - 1] ?? spec.cons[0]).map((c) => (
+                                <div key={c} className="flex items-start gap-1.5 text-[10px] font-semibold leading-snug text-[#ff5a4e]">
+                                  <span>▼</span><span>{c}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <button
+                onClick={() => gameRef.current?.resume()}
+                className="menu-btn font-display mt-6 w-full border-2 border-[#ff6b1a] bg-[rgba(255,107,26,0.12)] px-6 py-2.5 text-base tracking-widest text-[#ffb42e] hover:bg-[#ff6b1a] hover:text-[#14100c]"
+              >
+                BACK TO THE FLOOR
               </button>
             </div>
           </div>

@@ -72,7 +72,8 @@ export type GameEvent =
   | { type: "cleared"; wave: number; bonus: number }
   | { type: "kill"; text: string }
   | { type: "pickup"; text: string }
-  | { type: "draft"; cards: SkillCard[] };
+  | { type: "draft"; cards: SkillCard[] }
+  | { type: "locker"; open: boolean; owned: string[]; tiers: Record<string, number>; equipped: (string | null)[] };
 
 export interface FinalStats {
   wave: number;
@@ -147,12 +148,14 @@ interface Barrel {
 /* Supply drops are per-weapon. Rarity follows how much damage the gun deals
    per second of trigger time — the harder it outputs, the scarcer its crate
    (the pistol eats infinite rounds, so it never drops). */
-type PickupKind = "health" | "shells" | "smg" | "belt";
+type PickupKind = "health" | "shells" | "smg" | "belt" | "attach";
 
 interface Pickup {
   group: THREE.Group;
   kind: PickupKind;
   life: number;
+  modId?: GunModId;
+  tier?: number;
 }
 
 interface WeaponDef {
@@ -296,14 +299,14 @@ export class FoundryGame {
   private berserk = false;
   private berserkBonus = 0;
   private skillLevels: Record<string, number> = {};
-  /* per-weapon installed modifications — [weaponIdx][GunModId] */
-  private gunMods: Record<GunModId, boolean>[] = WEAPONS.map(() => ({
-    suppressor: false,
-    brake: false,
-    mag: false,
-    laser: false,
-    light: false,
-  }));
+  /* attachments are LOOT — picked up off dead raiders, stocked in the Gun
+     Locker, and only mounted on a gun by deliberate choice. Each part is a
+     single physical item: it rides one weapon at a time, and Mk.II is an
+     upgrade of the same part, not a second copy. */
+  private ownedMods: GunModId[] = [];
+  private ownedTier: Partial<Record<GunModId, number>> = {};
+  private equippedMods: (GunModId | null)[] = [null, null, null, null];
+  private lockerOpen = false;
   /* cached short-tags of the current gun's mods, rebuilt only on change */
   private modsCache: string[] = [];
   private modsCacheKey = "";
@@ -571,6 +574,11 @@ export class FoundryGame {
       e.preventDefault();
     if (e.repeat) return;
     this.keys.add(e.code);
+    /* Gun Locker opens from the floor or the pause screen */
+    if (e.code === "KeyB" && (this.phase === "playing" || this.phase === "paused")) {
+      this.toggleLocker();
+      return;
+    }
     if (this.phase !== "playing") return;
     if (e.code === "Digit1") this.switchTo(0);
     if (e.code === "Digit2") this.switchTo(1);
@@ -636,6 +644,7 @@ export class FoundryGame {
     if (document.pointerLockElement === this.canvas) {
       if (this.phase !== "playing") {
         this.phase = "playing";
+        this.lockerOpen = false;
         this.onEvent({ type: "playing" });
       }
     } else if (this.phase === "playing") {
@@ -726,7 +735,9 @@ export class FoundryGame {
     this.berserk = false;
     this.berserkBonus = 0;
     this.skillLevels = {};
-    this.gunMods = WEAPONS.map(() => ({ suppressor: false, brake: false, mag: false, laser: false, light: false }));
+    this.ownedMods = [];
+    this.ownedTier = {};
+    this.equippedMods = [null, null, null, null];
     this.refreshModVisuals();
     WEAPONS[0].magSize = 12;
     this.pos.set(0, 0, 8);
@@ -1496,17 +1507,15 @@ export class FoundryGame {
     this.camera.add(this.flashLight);
   }
 
-  /* show/hide each gun's installed hardware */
+  /* show/hide each gun's mounted hardware */
   private refreshModVisuals() {
-    const mods = this.gunMods[this.weaponIdx];
+    const eq = this.equippedMods[this.weaponIdx];
     this.modVisuals.forEach((rec, i) => {
-      const active = i === this.weaponIdx;
       (Object.keys(rec) as GunModId[]).forEach((id) => {
-        const on = active && mods[id];
-        rec[id].forEach((o) => (o.visible = on));
+        rec[id].forEach((o) => (o.visible = i === this.weaponIdx && eq === id));
       });
     });
-    if (this.flashLight) this.flashLight.intensity = mods.light ? 2.6 : 0;
+    if (this.flashLight) this.flashLight.intensity = eq === "light" ? (this.ownedTier.light === 2 ? 3.4 : 2.6) : 0;
   }
 
   /* ============================== FX pools ============================== */
@@ -1919,6 +1928,43 @@ export class FoundryGame {
     const r = Math.random();
     if (r < 0.09 * this.dropMul && this.hp < this.maxHp * 0.92) this.dropPickup(e.group.position, "health");
     else if (r < 0.23 * this.dropMul) this.dropPickup(e.group.position, this.rollAmmoDrop());
+
+    /* attachment loot — a separate, much rarer roll so a good haul feels
+       earned. Brutes rummage richer; the Salvage Rig multiplies it all. */
+    if (Math.random() < (e.kind === "brute" ? 0.16 : 0.05) * this.dropMul) this.dropAttachment(e.group.position);
+  }
+
+  /* pick a part weighted by its drop weight, then roll its tier.
+     You can only find a Mk.II of a part you already own the Mk.I of,
+     and duplicates are stripped for salvage instead of wasting a crate. */
+  private dropAttachment(at: THREE.Vector3) {
+    const unowned = GUN_MODS.filter((m) => !this.ownedMods.includes(m.id));
+    let pick: (typeof GUN_MODS)[number] | null = null;
+    let tier = 1;
+    if (unowned.length > 0) {
+      let total = 0;
+      for (const m of unowned) total += m.weight;
+      let roll = Math.random() * total;
+      pick = unowned[0];
+      for (const m of unowned) {
+        roll -= m.weight;
+        if (roll <= 0) {
+          pick = m;
+          break;
+        }
+      }
+    } else {
+      /* everything owned — chance at a Mk.II upgrade for a part you have */
+      const upgradable = GUN_MODS.filter((m) => (this.ownedTier[m.id] ?? 1) < 2);
+      if (upgradable.length === 0) {
+        this.score += 75;
+        this.onEvent({ type: "pickup", text: "SPARE PARTS — +75 SALVAGE" });
+        return;
+      }
+      pick = upgradable[(Math.random() * upgradable.length) | 0];
+      tier = 2;
+    }
+    this.dropPickup(at, "attach", pick.id, tier);
   }
 
   /* Rarity tracks raw output — the harder a gun hits, the scarcer its
@@ -1939,7 +1985,7 @@ export class FoundryGame {
     return "shells";
   }
 
-  private dropPickup(at: THREE.Vector3, kind: PickupKind) {
+  private dropPickup(at: THREE.Vector3, kind: PickupKind, modId?: GunModId, tier = 1) {
     const g = new THREE.Group();
     if (kind === "health") {
       const box = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.34, 0.5), new THREE.MeshLambertMaterial({ color: "#d8d2c4", flatShading: true }));
@@ -1951,14 +1997,31 @@ export class FoundryGame {
       const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 0.3), crossMat);
       c2.position.y = 0.18;
       g.add(c2);
+    } else if (kind === "attach" && modId) {
+      /* gun-part crate — Mk.II cases glow hot so you never walk past one */
+      const m = GUN_MODS.find((x) => x.id === modId);
+      const glowCol = tier >= 2 ? "#ff6b1a" : m?.rarity === "epic" ? "#ff2e1f" : "#ffb42e";
+      const box = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.32, 0.4), new THREE.MeshLambertMaterial({ color: "#43403b", flatShading: true }));
+      g.add(box);
+      const glow = new THREE.MeshBasicMaterial({ color: glowCol });
+      const lid = new THREE.Mesh(new THREE.BoxGeometry(0.57, 0.05, 0.42), glow);
+      lid.position.y = 0.18;
+      g.add(lid);
+      const gem = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), glow);
+      gem.position.y = 0.34;
+      gem.rotation.y = Math.PI / 4;
+      g.add(gem);
+      const beam = new THREE.PointLight(new THREE.Color(glowCol), tier >= 2 ? 30 : 16, 7, 1.8);
+      beam.position.y = 0.6;
+      g.add(beam);
     } else {
       /* per-cartridge supply crate — rarity reads in the paint */
-      const palette: Record<Exclude<PickupKind, "health">, { box: string; band: string }> = {
+      const palette: Record<Exclude<PickupKind, "health" | "attach">, { box: string; band: string }> = {
         shells: { box: "#7a3324", band: "#ff6b4a" }, /* common — red shotgun box */
         smg: { box: "#5c6248", band: "#a8c46a" }, /* uncommon — olive smg crate */
         belt: { box: "#3d4348", band: "#ffb42e" }, /* rare — dark lmg ammo can */
       };
-      const c = palette[kind];
+      const c = palette[kind as keyof typeof palette];
       const box = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.3, 0.36), new THREE.MeshLambertMaterial({ color: c.box, flatShading: true }));
       g.add(box);
       const band = new THREE.Mesh(new THREE.BoxGeometry(0.57, 0.1, 0.38), new THREE.MeshBasicMaterial({ color: c.band }));
@@ -1966,7 +2029,7 @@ export class FoundryGame {
     }
     g.position.set(at.x, 0.3, at.z);
     this.scene.add(g);
-    this.pickups.push({ group: g, kind, life: 18 });
+    this.pickups.push({ group: g, kind, life: 18, modId, tier });
   }
 
   /* ============================== Weapons ============================== */
@@ -1994,47 +2057,55 @@ export class FoundryGame {
     sfx.reload(0);
   }
 
-  /* ---- universal gun-mod effect helpers (see gunmods.ts) ---- */
+  /* ---- attachment effect helpers — every number is tier-aware (gunmods.ts) ---- */
   private hasMod(id: GunModId): boolean {
-    return this.gunMods[this.weaponIdx][id];
+    return this.equippedMods[this.weaponIdx] === id;
+  }
+  private modTier(id: GunModId): number {
+    return this.ownedTier[id] === 2 ? 2 : 1;
   }
   private modDmgMul(): number {
     let m = 1;
-    if (this.hasMod("suppressor")) m *= 0.88; /* subsonic loads hit softer */
-    if (this.hasMod("light")) m *= 1.05; /* dazzled targets */
+    if (this.hasMod("suppressor")) m *= this.modTier("suppressor") === 2 ? 0.94 : 0.88;
+    if (this.hasMod("light")) m *= this.modTier("light") === 2 ? 1.08 : 1.05; /* dazzled targets */
     return m;
   }
   private modSpreadMul(): number {
     let m = 1;
-    if (this.hasMod("suppressor")) m *= 0.85;
-    if (this.hasMod("brake")) m *= 1.2; /* side-vented gas scatters the pattern */
-    if (this.hasMod("laser")) m *= 0.65;
+    if (this.hasMod("suppressor") && this.modTier("suppressor") === 2) m *= 0.8; /* Mk.II tighter pattern */
+    if (this.hasMod("brake")) m *= this.modTier("brake") === 2 ? 1.1 : 1.2; /* side-vented gas scatters */
+    if (this.hasMod("laser")) m *= this.modTier("laser") === 2 ? 0.55 : 0.65;
     return m;
   }
   private modBloomMul(): number {
-    return this.hasMod("laser") ? 0.8 : 1;
+    if (this.hasMod("laser")) return this.modTier("laser") === 2 ? 0.7 : 0.8;
+    return 1;
   }
   private modRecoilScale(): number {
-    return this.hasMod("brake") ? 0.7 : 1;
+    return this.hasMod("brake") ? (this.modTier("brake") === 2 ? 0.6 : 0.7) : 1;
+  }
+  private modTraumaScale(): number {
+    return this.hasMod("brake") ? (this.modTier("brake") === 2 ? 0.7 : 0.8) : 1;
   }
   private modSwayMul(): number {
     let m = 1;
     if (this.hasMod("mag")) m *= 1.15; /* heavier feed */
-    if (this.hasMod("laser")) m *= 1.1; /* nose-heavy */
+    if (this.hasMod("laser")) m *= this.modTier("laser") === 2 ? 1.05 : 1.1; /* nose-heavy */
     return m;
   }
   private effMagSize(idx: number): number {
     const w = WEAPONS[idx];
-    return this.gunMods[idx].mag ? Math.round(w.magSize * 1.5) : w.magSize;
+    if (this.equippedMods[idx] !== "mag") return w.magSize;
+    return Math.round(w.magSize * (this.ownedTier.mag === 2 ? 1.75 : 1.5));
   }
   private reserveCap(idx: number): number {
     const base = [Infinity, 48, 144, 180][idx];
-    return base * (this.gunMods[idx].mag ? 1.3 : 1);
+    return base * (this.equippedMods[idx] === "mag" ? (this.ownedTier.mag === 2 ? 1.5 : 1.3) : 1);
   }
 
   private effReload(w: WeaponDef): number {
     let t = w.reloadTime / this.reloadMul;
-    if (this.hasMod("mag")) t *= 1.2; /* heavier mag, longer swap */
+    if (this.hasMod("mag")) t *= this.modTier("mag") === 2 ? 1.15 : 1.2; /* heavy feed, longer swap */
     if (this.hasMod("laser")) t *= 1.1; /* rail clutter */
     return t;
   }
@@ -2289,7 +2360,7 @@ export class FoundryGame {
   private rollCards(n: number): SkillCard[] {
     type PoolItem = { weight: number; card: SkillCard };
     const pool: PoolItem[] = [];
-    /* player skills */
+    /* player skills only — attachments are floor loot now (see Gun Locker) */
     for (const s of SKILLS) {
       if ((this.skillLevels[s.id] ?? 0) >= s.maxLevel) continue;
       pool.push({
@@ -2297,26 +2368,6 @@ export class FoundryGame {
         card: { id: s.id, name: s.name, desc: s.desc, tag: s.tag, rarity: s.rarity, level: this.skillLevels[s.id] ?? 0, maxLevel: s.maxLevel },
       });
     }
-    /* gun-mod cards — every not-yet-installed mod on every gun */
-    WEAPONS.forEach((w, wi) => {
-      for (const m of GUN_MODS) {
-        if (this.gunMods[wi][m.id]) continue;
-        pool.push({
-          weight: m.weight,
-          card: {
-            id: `mod:${m.id}:${wi}`,
-            name: m.name,
-            desc: m.desc,
-            tag: w.tag,
-            rarity: m.rarity,
-            level: 0,
-            maxLevel: 1,
-            pros: m.pros,
-            cons: m.cons,
-          },
-        });
-      }
-    });
     const cards: SkillCard[] = [];
     while (cards.length < n && pool.length > 0) {
       let total = 0;
@@ -2350,12 +2401,8 @@ export class FoundryGame {
 
   chooseCard(id: string) {
     if (this.phase !== "draft") return;
-    if (id.startsWith("mod:")) {
-      this.applyGunMod(id);
-    } else {
-      this.applyCard(id);
-      this.skillLevels[id] = (this.skillLevels[id] ?? 0) + 1;
-    }
+    this.applyCard(id);
+    this.skillLevels[id] = (this.skillLevels[id] ?? 0) + 1;
     sfx.pickup("ammo");
     this.startIntermission();
     this.phase = "playing";
@@ -2363,21 +2410,62 @@ export class FoundryGame {
     this.lockPointer();
   }
 
-  /* install a universal gun mod — id format: "mod:<modId>:<weaponIdx>" */
-  private applyGunMod(id: string) {
-    const [, modId, wIdx] = id.split(":");
-    const wi = parseInt(wIdx, 10);
-    const mid = modId as GunModId;
-    if (!this.gunMods[wi] || this.gunMods[wi][mid]) return;
-    this.gunMods[wi][mid] = true;
-    /* extended mag tops up the gun immediately */
-    if (mid === "mag") {
-      const w = WEAPONS[wi];
-      this.mags[wi] = Math.min(this.effMagSize(wi), this.mags[wi] + Math.round(w.magSize * 0.5));
+  /* ============================== Gun Locker ============================== */
+
+  /* B — freeze the floor and open the attachment bench (App renders it).
+     Pressing B again closes the bench back to the normal pause screen. */
+  private toggleLocker() {
+    if (this.phase === "playing") {
+      this.sanitizeInput();
+      this.phase = "paused";
+      this.onEvent({ type: "paused" });
+      this.lockerOpen = true;
+      this.emitLocker(true);
+      if (document.pointerLockElement === this.canvas) {
+        try {
+          document.exitPointerLock();
+        } catch {
+          /* already unlocked */
+        }
+      }
+    } else if (this.phase === "paused") {
+      this.lockerOpen = !this.lockerOpen;
+      this.emitLocker(this.lockerOpen);
     }
+  }
+
+  /* called from the pause menu's GUN LOCKER button */
+  openLockerFromPause() {
+    if (this.phase !== "paused") return;
+    this.lockerOpen = true;
+    this.emitLocker(true);
+  }
+
+  private emitLocker(open: boolean) {
+    this.onEvent({
+      type: "locker",
+      open,
+      owned: [...this.ownedMods],
+      tiers: { ...this.ownedTier } as Record<string, number>,
+      equipped: [...this.equippedMods],
+    });
+  }
+
+  equipMod(slot: number, id: string) {
+    const mid = id as GunModId;
+    if (slot < 0 || slot > 3 || !this.ownedMods.includes(mid)) return;
+    this.equippedMods[slot] = mid;
     this.refreshModVisuals();
-    const m = GUN_MODS.find((g) => g.id === mid);
-    this.onEvent({ type: "pickup", text: `${WEAPONS[wi].tag} · ${m?.name ?? mid} INSTALLED` });
+    sfx.reload(2);
+    this.emitLocker(this.lockerOpen);
+  }
+
+  unequipMod(slot: number) {
+    if (slot < 0 || slot > 3 || !this.equippedMods[slot]) return;
+    this.equippedMods[slot] = null;
+    this.refreshModVisuals();
+    sfx.reload(0);
+    this.emitLocker(this.lockerOpen);
   }
 
   private applyCard(id: string) {
@@ -2826,6 +2914,20 @@ export class FoundryGame {
         } else if (p.kind === "belt") {
           this.reserves[3] = Math.min(this.reserveCap(3), this.reserves[3] + 30);
           this.onEvent({ type: "pickup", text: "+30 LMG BELT" });
+        } else if (p.kind === "attach" && p.modId) {
+          /* pocket the part — it waits in the Gun Locker until mounted */
+          const m = GUN_MODS.find((x) => x.id === p.modId);
+          if (!this.ownedMods.includes(p.modId)) {
+            this.ownedMods.push(p.modId);
+            this.ownedTier[p.modId] = p.tier ?? 1;
+            this.onEvent({ type: "pickup", text: `${m?.name ?? "GUN PART"} ${tierLabel(p.tier ?? 1)} — PRESS [B] TO MOUNT` });
+          } else {
+            this.ownedTier[p.modId] = Math.max(this.ownedTier[p.modId] ?? 1, p.tier ?? 1);
+            this.onEvent({ type: "pickup", text: `${m?.name ?? "GUN PART"} UPGRADED TO ${tierLabel(p.tier ?? 1)}` });
+          }
+          sfx.waveClear();
+          p.life = 0;
+          continue;
         }
         sfx.pickup(p.kind === "health" ? "health" : "ammo");
         p.life = 0;
@@ -2858,11 +2960,12 @@ export class FoundryGame {
 
     /* ---------- HUD ---------- */
     const alive = this.enemies.filter((e) => e.state !== "dead").length + this.spawnQueue.length;
-    const gm = this.gunMods[this.weaponIdx];
-    const modKey = `${this.weaponIdx}|${gm.suppressor ? 1 : 0}${gm.brake ? 1 : 0}${gm.mag ? 1 : 0}${gm.laser ? 1 : 0}${gm.light ? 1 : 0}`;
+    const eq = this.equippedMods[this.weaponIdx];
+    const modKey = `${this.weaponIdx}|${eq ?? "-"}`;
     if (modKey !== this.modsCacheKey) {
       this.modsCacheKey = modKey;
-      this.modsCache = GUN_MODS.filter((m) => gm[m.id]).map((m) => m.short);
+      const m = eq ? GUN_MODS.find((x) => x.id === eq) : undefined;
+      this.modsCache = m ? [m.short] : [];
     }
     this.onHud({
       hp: Math.ceil(this.hp),
