@@ -49,9 +49,12 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     referenceBarrelIn: 5.0,
     velGainPerIn: 12, /* fast-burning pistol powder — little left to give */
     energyJ: 350,
-    baseDamage: 34,
-    knockback: 1.4,
-    ragdollForce: 5.5,
+    /* damage tracks real muzzle energy (E ∝ v²), anchored so the in-game
+       number equals the round's true stopping-power ratio. .45 is the
+       WEAKEST projectile here — 350 J next to the rifle's 3304 J. */
+    baseDamage: 24.9,
+    knockback: 1.6,
+    ragdollForce: 6,
     flashScale: 0.62,
     tracer: "#ffe8b0",
     note: "SLOW · HEAVY · HITS LIKE A DOOR",
@@ -64,9 +67,10 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     referenceBarrelIn: 4.7, /* SAAMI reference barrel */
     velGainPerIn: 26,
     energyJ: 519,
-    baseDamage: 14.1,
-    knockback: 0.9,
-    ragdollForce: 4.2,
+    /* 519 J — out-damages the .45 per projectile, as it should */
+    baseDamage: 30.8,
+    knockback: 1.2,
+    ragdollForce: 5,
     flashScale: 0.46,
     tracer: "#ffe08f",
     note: "FAST · FLAT · ECONOMICAL",
@@ -79,9 +83,10 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     referenceBarrelIn: 18.0,
     velGainPerIn: 20,
     energyJ: 310, /* per pellet */
-    baseDamage: 14.75,
-    knockback: 6.5,
-    ragdollForce: 11,
+    /* 310 J per pellet — nine of them is what makes it hurt */
+    baseDamage: 21.8,
+    knockback: 2.5, /* per pellet — eight hits stack into a real shove */
+    ragdollForce: 4,
     flashScale: 1.0,
     tracer: "#ffc37e",
     note: "NINE CHANCES PER TRIGGER",
@@ -94,9 +99,11 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     referenceBarrelIn: 20.0, /* M80 ball, 20" test barrel */
     velGainPerIn: 40, /* slow rifle powder — long barrels earn real speed */
     energyJ: 3304,
-    baseDamage: 24.6,
-    knockback: 2.2,
-    ragdollForce: 8,
+    /* 3304 J — ~9.4× the .45. The most powerful projectile in the game,
+       and therefore the rarest to find. */
+    baseDamage: 222.7,
+    knockback: 5.0,
+    ragdollForce: 16,
     flashScale: 0.8,
     tracer: "#ffb45e",
     note: "RIFLE ENERGY · MACHINE-GUN VOLUME",

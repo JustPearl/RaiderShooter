@@ -126,9 +126,13 @@ interface Barrel {
   dead: boolean;
 }
 
+/* Ammo drops are per-cartridge. Rarity follows stopping power: the harder a
+   round hits, the scarcer its supply crate (.45 is infinite, so it never drops). */
+type PickupKind = "health" | "shells" | "para" | "nato";
+
 interface Pickup {
   group: THREE.Group;
-  kind: "health" | "ammo";
+  kind: PickupKind;
   life: number;
 }
 
@@ -1597,10 +1601,28 @@ export class FoundryGame {
     /* drops — boosted by the salvage rig */
     const r = Math.random();
     if (r < 0.09 * this.dropMul && this.hp < this.maxHp * 0.92) this.dropPickup(e.group.position, "health");
-    else if (r < 0.17 * this.dropMul) this.dropPickup(e.group.position, "ammo");
+    else if (r < 0.23 * this.dropMul) this.dropPickup(e.group.position, this.rollAmmoDrop());
   }
 
-  private dropPickup(at: THREE.Vector3, kind: "health" | "ammo") {
+  /* Rarity tracks stopping power — the harder the round hits, the scarcer
+     its supply. .45 is infinite so it never appears here. */
+  private rollAmmoDrop(): PickupKind {
+    const table: { kind: PickupKind; weight: number }[] = [
+      { kind: "shells", weight: 5.0 }, /* 22 dmg/pellet — plentiful */
+      { kind: "para", weight: 3.0 }, /* 37 dmg — uncommon */
+      { kind: "nato", weight: 0.8 }, /* 236 dmg — rare */
+    ];
+    let total = 0;
+    for (const t of table) total += t.weight;
+    let roll = Math.random() * total;
+    for (const t of table) {
+      roll -= t.weight;
+      if (roll <= 0) return t.kind;
+    }
+    return "shells";
+  }
+
+  private dropPickup(at: THREE.Vector3, kind: PickupKind) {
     const g = new THREE.Group();
     if (kind === "health") {
       const box = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.34, 0.5), new THREE.MeshLambertMaterial({ color: "#d8d2c4", flatShading: true }));
