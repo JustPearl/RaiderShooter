@@ -2998,7 +2998,7 @@ export class FoundryGame {
         if (e.burstT <= 0 && e.burst > 0) {
           e.burst--;
           e.burstT = 0.17;
-          const spreadMul = Math.max(0.45, 1 - (this.wave - 1) * 0.045);
+          const spreadMul = Math.max(0.6, 1 - (this.wave - 1) * 0.035);
           this.spawnRaiderBullet(e, spreadMul);
         }
         if (e.burstT > 0.05) {
@@ -3153,8 +3153,8 @@ export class FoundryGame {
       const rr = (shotgun ? 7.5 : 4.2) * (quiet ? 0.5 : 1);
       if (d > rr) continue;
       let chance = shotgun
-        ? e.kind === "runner" ? 0.8 : e.kind === "scrapper" ? 0.5 : 0.25
-        : e.kind === "runner" ? 0.3 : 0.15;
+        ? e.kind === "runner" ? 0.8 : e.kind === "scrapper" ? 0.28 : 0.25
+        : e.kind === "runner" ? 0.3 : e.kind === "scrapper" ? 0.09 : 0.15;
       if (quiet) chance *= 0.5;
       if (loud) chance *= 1.25;
       if (Math.random() >= chance) continue;
@@ -3162,8 +3162,10 @@ export class FoundryGame {
       const ez = e.group.position.z - this.pos.z;
       const el = Math.hypot(ex, ez) || 1;
       const side = Math.random() < 0.5 ? 1 : -1;
-      e.dodgeVx = (-ez / el) * side * 6.5;
-      e.dodgeVz = (ex / el) * side * 6.5;
+      /* gunners shuffle out of the way rather than dive; heavies barely budge */
+      const dodgeImp = e.kind === "runner" ? 6.5 : e.kind === "scrapper" ? 3.8 : 2.6;
+      e.dodgeVx = (-ez / el) * side * dodgeImp;
+      e.dodgeVz = (ex / el) * side * dodgeImp;
       e.dodgeT = 0.28;
       e.dodgeDir = side;
       if (e.state === "windup") {
@@ -3272,7 +3274,8 @@ export class FoundryGame {
     dx /= len;
     dy /= len;
     dz /= len;
-    const sm = 0.13 * spreadMul;
+    /* sloppy iron sights — wide cone that only tightens slowly with waves */
+    const sm = 0.2 * spreadMul;
     dx += (Math.random() - 0.5) * sm;
     dy += (Math.random() - 0.5) * sm * 0.6;
     dz += (Math.random() - 0.5) * sm;
