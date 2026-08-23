@@ -15,6 +15,28 @@ interface Banner {
 
 let uid = 1;
 
+function OptRow(props: { label: string; value: number; min: number; max: number; step: number; display: string; onChange: (v: number) => void }) {
+  return (
+    <div className="mb-5">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-display text-[12px] tracking-[0.24em] text-[#cdbfa8]">{props.label}</span>
+        <span className="font-display text-[15px] text-[#ffb42e]" style={{ textShadow: "0 0 12px rgba(255,180,46,0.5)" }}>
+          {props.display}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={props.min}
+        max={props.max}
+        step={props.step}
+        value={props.value}
+        onChange={(e) => props.onChange(parseFloat(e.target.value))}
+        className="opt-range w-full"
+      />
+    </div>
+  );
+}
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef<FoundryGame | null>(null);
@@ -60,6 +82,24 @@ export default function App() {
   const [volume, setVolume] = useState(() => loadOpt("fo-volume", 1, 0, 1));
   const [sens, setSens] = useState(() => loadOpt("fo-sens", 1, 0.5, 2));
   const [optOpen, setOptOpen] = useState(false);
+
+  /* lift the 480i signal before the CRT filter; persisted per panel */
+  useEffect(() => {
+    if (canvasRef.current) {
+      canvasRef.current.style.filter = `contrast(1.07) saturate(1.1) brightness(${(1.02 * brightness).toFixed(3)})`;
+    }
+    localStorage.setItem("fo-brightness", String(brightness));
+  }, [brightness]);
+
+  useEffect(() => {
+    sfx.setVolume(volume);
+    localStorage.setItem("fo-volume", String(volume));
+  }, [volume]);
+
+  useEffect(() => {
+    gameRef.current?.setSensitivity(sens);
+    localStorage.setItem("fo-sens", String(sens));
+  }, [sens]);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -171,6 +211,7 @@ export default function App() {
 
     const game = new FoundryGame(canvasRef.current, onEvent, onHud);
     gameRef.current = game;
+    game.setSensitivity(sens);
     return () => {
       game.dispose();
       gameRef.current = null;
@@ -353,7 +394,7 @@ export default function App() {
           {/* bottom-right: weapon + ammo */}
           <div className="absolute bottom-6 right-5 flex flex-col items-end gap-2">
             <div className="flex gap-2">
-              {["1 P-9", "2 M870"].map((label, i) => (
+              {["1 P-9", "2 M870", "3 VK-9"].map((label, i) => (
                 <div
                   key={label}
                   ref={slotRefs[i]}
@@ -447,6 +488,16 @@ export default function App() {
                   <span className="absolute inset-[3px] flex items-center justify-center bg-[#ffb42e] px-8" style={{ clipPath: "polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px))" }}>
                     CLOCK IN
                   </span>
+                </button>
+                <button
+                  onClick={() => {
+                    sfx.ensure();
+                    sfx.uiMove();
+                    setOptOpen(true);
+                  }}
+                  className="menu-btn border border-[rgba(184,168,143,0.4)] px-6 py-3.5 font-display text-sm tracking-[0.25em] text-[#cdbfa8] hover:border-[#ffb42e] hover:text-[#ffb42e]"
+                >
+                  OPTIONS
                 </button>
                 <div className="text-[11px] font-semibold leading-relaxed tracking-[0.2em] text-[#8a7f6c]">
                   MOUSE + KEYBOARD
@@ -564,10 +615,81 @@ export default function App() {
                 RESTART RUN
               </button>
               <button
+                onClick={() => {
+                  sfx.ensure();
+                  sfx.uiMove();
+                  setOptOpen(true);
+                }}
+                className="menu-btn font-display border border-[rgba(184,168,143,0.4)] px-6 py-2.5 text-sm tracking-widest text-[#cdbfa8] hover:border-[#ffb42e] hover:text-[#ffb42e]"
+              >
+                OPTIONS
+              </button>
+              <button
                 onClick={() => gameRef.current?.toAttract()}
                 className="menu-btn font-display border border-[rgba(184,168,143,0.4)] px-6 py-2.5 text-sm tracking-widest text-[#cdbfa8] hover:border-[#ffb42e] hover:text-[#ffb42e]"
               >
                 ABANDON POST
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======= OPTIONS ======= */}
+      {optOpen && (
+        <div className="fixed inset-0 z-[58] flex items-center justify-center bg-[rgba(8,6,3,0.85)]" style={{ cursor: "crosshair" }}>
+          <div className="pointer-events-none absolute inset-0 menu-grid opacity-50" />
+          <div className="relative w-[min(560px,92vw)]">
+            <div className="hud-panel px-8 py-7">
+              <div className="mb-1 flex items-baseline justify-between">
+                <div className="font-display text-2xl tracking-wide text-[#ff6b1a]">OPTIONS</div>
+                <span className="text-[10px] font-semibold tracking-[0.25em] text-[#6e6353]">SAVES AUTOMATICALLY</span>
+              </div>
+              <div className="hazard-tape mb-6 mt-3 h-[5px] opacity-80" />
+
+              <OptRow
+                label="BRIGHTNESS"
+                value={brightness}
+                min={0.5}
+                max={1.6}
+                step={0.02}
+                display={`${Math.round(brightness * 100)}%`}
+                onChange={setBrightness}
+              />
+              <OptRow
+                label="VOLUME"
+                value={volume}
+                min={0}
+                max={1}
+                step={0.02}
+                display={`${Math.round(volume * 100)}%`}
+                onChange={(v) => {
+                  sfx.ensure();
+                  setVolume(v);
+                }}
+              />
+              <OptRow
+                label="MOUSE SENSITIVITY"
+                value={sens}
+                min={0.5}
+                max={2}
+                step={0.02}
+                display={`${Math.round(sens * 100)}%`}
+                onChange={(v) => setSens(v)}
+              />
+
+              <p className="mt-1 text-[10.5px] leading-relaxed text-[#6e6353]">
+                BRIGHTNESS LIFTS THE 480i SIGNAL BEFORE THE CRT FILTER — RAISE IT IF THE FOUNDRY FLOOR LOOKS TOO DARK ON YOUR PANEL.
+              </p>
+
+              <button
+                onClick={() => {
+                  sfx.uiMove();
+                  setOptOpen(false);
+                }}
+                className="menu-btn mt-6 w-full border border-[rgba(255,107,26,0.5)] bg-[rgba(255,107,26,0.08)] px-6 py-2.5 font-display text-sm tracking-[0.3em] text-[#ffb42e] hover:bg-[rgba(255,107,26,0.18)]"
+              >
+                CLOSE
               </button>
             </div>
           </div>

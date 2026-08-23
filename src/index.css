@@ -291,3 +291,32 @@ button.menu-btn:hover {
 button.menu-btn:active {
   transform: translateY(1px) skewX(-8deg);
 }
+
+/* ---------- options sliders ---------- */
+input[type="range"].opt-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  background: linear-gradient(90deg, rgba(255, 107, 26, 0.55), rgba(255, 180, 46, 0.25));
+  border: 1px solid rgba(255, 107, 26, 0.35);
+  outline: none;
+  cursor: crosshair;
+}
+input[type="range"].opt-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 22px;
+  background: linear-gradient(180deg, #ffd9a8, #ff6b1a);
+  border: 1px solid #14100c;
+  box-shadow: 0 0 10px rgba(255, 107, 26, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 5px), 50% 100%, 0 calc(100% - 5px));
+}
+input[type="range"].opt-range::-moz-range-thumb {
+  width: 14px;
+  height: 22px;
+  background: linear-gradient(180deg, #ffd9a8, #ff6b1a);
+  border: 1px solid #14100c;
+  border-radius: 0;
+  box-shadow: 0 0 10px rgba(255, 107, 26, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
