@@ -614,7 +614,7 @@ export default function App() {
                       <rect x="8" y="9" width="6" height="8" fill="#8a7f6c" />
                     </svg>
                     <p className="text-[#cdbfa8]">
-                      <span className="font-bold text-[#ffe8c8]">P-9 SCRAPLOCK</span> — .45 ACP sidearm. Slow, heavy rounds out of a 5.1" barrel. Bottomless reserve. Headshots pay double.
+                      <span className="font-bold text-[#ffe8c8]">P-9 SCRAPLOCK</span> — .45 ACP. Slow, heavy, bottomless reserve. Pays ×2.5 on headshots — but barely scratches brute plating.
                     </p>
                   </div>
                   <div className="flex items-start gap-3">
@@ -623,7 +623,7 @@ export default function App() {
                       <rect x="18" y="10" width="11" height="5" fill="#8a5a3c" />
                     </svg>
                     <p className="text-[#cdbfa8]">
-                      <span className="font-bold text-[#ffe8c8]">M870 BREAKER</span> — 8-pellet scattergun. Shells are scarce. Point-blank deletes.
+                      <span className="font-bold text-[#ffe8c8]">M870 BREAKER</span> — 8-pellet scattergun. Point-blank erases and shatters poise with one blast — past 6 m it's a flashlight. Shells are scarce.
                     </p>
                   </div>
                   <div className="flex items-start gap-3">
@@ -633,7 +633,7 @@ export default function App() {
                       <rect x="12" y="10" width="5" height="8" fill="#4a4d52" />
                     </svg>
                     <p className="text-[#cdbfa8]">
-                      <span className="font-bold text-[#ffe8c8]">VK-9 WESPE</span> — western-block prototype. Full-auto 9mm, 24-round grip mag. Drinks ammo, blooms hot.
+                      <span className="font-bold text-[#ffe8c8]">VK-9 WESPE</span> — full-auto 9mm, flat out to 12 m. The all-rounder: chews light plating, drinks ammo, blooms hot.
                     </p>
                   </div>
                   <div className="flex items-start gap-3">
@@ -645,7 +645,7 @@ export default function App() {
                       <rect x="15" y="4" width="2" height="2" fill="#b8a88f" />
                     </svg>
                     <p className="text-[#cdbfa8]">
-                      <span className="font-bold text-[#ffe8c8]">MG-7 HOG</span> — belt-fed 7.62. 60-round box, heavy stagger, slow barrel heat. Lugs at 85% speed, hates sprinting.
+                      <span className="font-bold text-[#ffe8c8]">MG-7 HOG</span> — belt-fed 7.62, flat damage across the whole arena, and the only round that punches straight through brute plating. Lugs at 85% speed.
                     </p>
                   </div>
                   <div className="flex items-start gap-3">
@@ -664,7 +664,7 @@ export default function App() {
                       <rect x="14" y="12.5" width="2" height="2" fill="#ff2e1f" />
                     </svg>
                     <p className="text-[#cdbfa8]">
-                      <span className="font-bold text-[#ff8a5e]">THREAT INTEL</span> — raiders flank, feint and encircle. A point-blank blast breaks a wound-up swing. Sidestep the brute's stomp, then punish the stagger.
+                      <span className="font-bold text-[#ff8a5e]">THREAT INTEL</span> — raiders flank, feint and encircle. Brutes wear scrap plating: small calibers spark off it — bring the HOG, aim for the head, or shatter their poise with buckshot. A heavy blast breaks a wound-up swing; sidestep the stomp, punish the stagger.
                     </p>
                   </div>
                 </div>

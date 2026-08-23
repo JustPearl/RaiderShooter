@@ -1,21 +1,26 @@
 /* ============================================================
-   Ammunition database.
-   Every cartridge carries its real ballistic card: projectile
-   weight, reference muzzle velocity, the barrel that velocity
-   was measured from, and how much speed the powder still has
-   left to give per extra inch of barrel. Damage is not a magic
-   number — it is the round's stopping power at its reference
-   barrel, scaled by the kinetic-energy ratio (E ∝ v²) at the
-   length of barrel actually fitted to the gun. Longer barrel,
-   more complete powder burn, more speed, more damage.
+   Ammunition database — real ballistics in, combat stats out.
 
-   Base damage follows real muzzle energy on a FLATTENED curve —
-   the fourth root (E^0.25) — so the ordering and direction of
-   real ballistics are preserved while arcade numbers stay sane:
-   the 7.62's raw ~9.4× energy advantage over the .45 lands at
-   ~1.8× in-game. No projectile one-shots anything; the rifle's
-   edge is per-shot punch within a sustainable burst, not instakill.
+   Every cartridge carries its real load: projectile weight,
+   reference muzzle velocity, the barrel it was clocked from and
+   how much speed the powder still has left per inch of barrel.
+   Damage keeps the barrel-physics truth (kinetic energy ∝ v²)
+   but compresses real muzzle energy with a 0.4-power curve —
+   the compromise between arcade-flat and full-realism, so the
+   rifle dominates without vaporizing the room.
+
+   The other three combat stats are physics too:
+   · PIERCE  — sectional density decides what gets through scrap
+     plating. Slow heavy .45 pushes poorly; the 7.62 goes through.
+   · STAGGER — momentum (grain × velocity) decides impact. The
+     .45 shoves hardest of the handguns; a rifle round lands like
+     a hammer; each buck pellet nudges, but eight arrive at once.
+   · FALLOFF — real effective range shapes the retention curve:
+     smoothbore dies past a few metres, rifle stays flat across
+     the whole arena.
    ============================================================ */
+
+import type { FalloffSpec } from "./damage";
 
 export type AmmoId = "acp45" | "para9" | "buck12" | "nato762";
 
@@ -33,8 +38,19 @@ export interface AmmoSpec {
   velGainPerIn: number;
   /** muzzle energy of the reference load, joules */
   energyJ: number;
-  /** stopping power at the reference barrel — base damage */
+
+  /* ---- combat stats (E^0.4 compression of real energy) ---- */
+  /** stopping power at the reference barrel — base damage per projectile */
   baseDamage: number;
+  /** plating penetration — armor points this round ignores */
+  pierce: number;
+  /** impact value — drives hitstun and poise breaks */
+  stagger: number;
+  /** headshot multiplier — precision calibers pay more for aimed shots */
+  headMul: number;
+  /** damage retention over distance */
+  falloff: FalloffSpec;
+
   /** shove imparted to whatever it hits (game knockback units) */
   knockback: number;
   /** how hard the hit throws a ragdoll */
@@ -56,14 +72,18 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     referenceBarrelIn: 5.0,
     velGainPerIn: 12, /* fast-burning pistol powder — little left to give */
     energyJ: 350,
-    /* 350 J — the weakest projectile on the curve, as reality dictates.
-       Its trade is a bottomless reserve: volume over punch. */
-    baseDamage: 18,
+    /* 350 J on the 0.4-power curve. Slow and heavy: the best headshot
+       reward of the handguns, the worst answer to scrap plating. */
+    baseDamage: 23,
+    pierce: 2,
+    stagger: 7,
+    headMul: 2.5,
+    falloff: { full: 8, floor: 20, min: 0.5 },
     knockback: 1.6,
     ragdollForce: 6,
     flashScale: 0.62,
     tracer: "#ffe8b0",
-    note: "SLOW · HEAVY · HITS LIKE A DOOR",
+    note: "SLOW · HEAVY · PRECISION-WEIGHTED",
   },
   para9: {
     id: "para9",
@@ -73,9 +93,13 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     referenceBarrelIn: 4.7, /* SAAMI reference barrel */
     velGainPerIn: 26,
     energyJ: 519,
-    /* 519 J — a touch above the .45 per projectile. Its real edge is
-       rate of fire and a long barrel that wrings +26 fps per inch. */
-    baseDamage: 20,
+    /* 519 J — the all-rounder: highest small-arms velocity here, so it
+       stretches to a 12 m envelope and chews light plating. */
+    baseDamage: 26,
+    pierce: 5,
+    stagger: 5,
+    headMul: 2.0,
+    falloff: { full: 12, floor: 25, min: 0.55 },
     knockback: 1.2,
     ragdollForce: 5,
     flashScale: 0.46,
@@ -90,9 +114,13 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     referenceBarrelIn: 18.0,
     velGainPerIn: 20,
     energyJ: 310, /* per pellet */
-    /* 310 J per pellet — under the .45 per shot, matching real energy.
-       Eight of them landing at once is what makes it hurt. */
-    baseDamage: 17,
+    /* 310 J per pellet, delivered eight at a time. Devastating inside
+       6 m — a rounding error past 15. Armor eats each pellet separately. */
+    baseDamage: 18,
+    pierce: 2,
+    stagger: 2, /* per pellet — a full blast lands 16+ and breaks poise */
+    headMul: 2.0,
+    falloff: { full: 6, floor: 15, min: 0.35 },
     knockback: 2.5, /* per pellet — eight hits stack into a real shove */
     ragdollForce: 4,
     flashScale: 1.0,
@@ -107,16 +135,19 @@ export const AMMO: Record<AmmoId, AmmoSpec> = {
     referenceBarrelIn: 20.0, /* M80 ball, 20" test barrel */
     velGainPerIn: 40, /* slow rifle powder — long barrels earn real speed */
     energyJ: 3304,
-    /* 3304 J — still the hardest-hitting projectile (~1.8× the .45 on the
-       flattened fourth-root curve, not the raw 9.4×). Strong enough that a
-       burst shreds, never enough to one-shot. Its real costs are the
-       scarce reserve, the 2.6s belt swap and 85% move speed. */
-    baseDamage: 32,
+    /* 3304 J — the hardest-hitting projectile in the game (~1.8× the .45
+       on the curve, not the raw 9.4×). Flat across the arena, and its
+       sectional density ignores brute plating outright. */
+    baseDamage: 42,
+    pierce: 16,
+    stagger: 14,
+    headMul: 1.5,
+    falloff: { full: 20, floor: 35, min: 0.85 },
     knockback: 5.0,
     ragdollForce: 16,
     flashScale: 0.8,
     tracer: "#ffb45e",
-    note: "RIFLE ENERGY · MACHINE-GUN VOLUME",
+    note: "RIFLE ENERGY · PLATE-BREAKER",
   },
 };
 
