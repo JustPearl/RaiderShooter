@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { FoundryGame, type GameEvent, type HudData, type FinalStats, type GamePhase, type SkillCard } from "./game/engine";
+import { FoundryGame, type GameEvent, type HudData, type FinalStats, type GamePhase, type SkillCard, type ResMode, type AAMode } from "./game/engine";
 import { sfx } from "./game/audio";
 
 interface KillEntry {
@@ -83,6 +83,23 @@ export default function App() {
   const [brightness, setBrightness] = useState(() => loadOpt("fo-brightness", 1, 0.5, 1.6));
   const [volume, setVolume] = useState(() => loadOpt("fo-volume", 1, 0, 1));
   const [sens, setSens] = useState(() => loadOpt("fo-sens", 1, 0.5, 2));
+  /* graphics — persisted under the same keys the engine reads at boot */
+  const [resMode, setResMode] = useState<ResMode>(() => {
+    try {
+      const r = localStorage.getItem("fo_res");
+      return r === "720" || r === "1080" || r === "native" ? r : "480";
+    } catch {
+      return "480";
+    }
+  });
+  const [aaMode, setAaMode] = useState<AAMode>(() => {
+    try {
+      const a = localStorage.getItem("fo_aa");
+      return a === "fxaa" || a === "msaa" ? a : "off";
+    } catch {
+      return "off";
+    }
+  });
   const [optOpen, setOptOpen] = useState(false);
 
   /* lift the 480i signal before the CRT filter; persisted per panel */
@@ -102,6 +119,14 @@ export default function App() {
     gameRef.current?.setSensitivity(sens);
     localStorage.setItem("fo-sens", String(sens));
   }, [sens]);
+
+  useEffect(() => {
+    gameRef.current?.setResolution(resMode);
+  }, [resMode]);
+
+  useEffect(() => {
+    gameRef.current?.setAA(aaMode);
+  }, [aaMode]);
 
   useEffect(() => {
     if (!canvasRef.current) return;

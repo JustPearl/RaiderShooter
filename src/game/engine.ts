@@ -4,6 +4,11 @@ import { buildRaiderRig, updateRaiderAnim, WINDUP_TIME, type RaiderRig } from ".
 import { RecoilRig, RECOIL_SPECS, RECOIL_INTENSITY } from "./recoil";
 import { AMMO, effectiveDamage, muzzleVelocity, type AmmoId, type AmmoSpec } from "./ammo";
 import { GUN_MODS, GUN_MOD_INDEX, type GunModId } from "./gunmods";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { FXAAShader } from "three/examples/jsm/shaders/FXAAShader.js";
 import { createRagdoll, impulseRagdoll, stepRagdoll, type Ragdoll } from "./ragdoll";
 import {
   floorTexture,
@@ -167,6 +172,11 @@ interface WeaponDef {
 
 /* ============================== Engine ============================== */
 
+/* graphics settings — internal render resolution and antialiasing filter */
+export type ResMode = "480" | "720" | "1080" | "native";
+export type AAMode = "off" | "fxaa" | "msaa";
+const RES_HEIGHT: Record<Exclude<ResMode, "native">, number> = { "480": 480, "720": 720, "1080": 1080 };
+
 const VW = 854;
 const VH = 480;
 const ARENA = 31;
@@ -300,6 +310,73 @@ export class FoundryGame {
     this.lookSens = Math.max(0.3, Math.min(2.5, v));
   }
 
+  /* ---------------- graphics settings: resolution + antialiasing ---------------- */
+  private resMode: ResMode = "480";
+  private aaMode: AAMode = "off";
+  private composer: EffectComposer | null = null;
+
+  setResolution(m: ResMode) {
+    this.resMode = m;
+    try {
+      localStorage.setItem("fo_res", m);
+    } catch {
+      /* private mode */
+    }
+    this.applyGraphics();
+  }
+
+  setAA(m: AAMode) {
+    this.aaMode = m;
+    try {
+      localStorage.setItem("fo_aa", m);
+    } catch {
+      /* private mode */
+    }
+    this.applyGraphics();
+  }
+
+  private onWinResize = () => this.applyGraphics();
+
+  /* rebuild the output chain: buffer size, upscale filter and post passes */
+  private applyGraphics() {
+    if (this.disposed || !this.renderer) return;
+    const aspect = Math.max(0.5, window.innerWidth / Math.max(1, window.innerHeight));
+    let w: number;
+    let h: number;
+    if (this.resMode === "native") {
+      w = Math.max(320, window.innerWidth);
+      h = Math.max(240, window.innerHeight);
+    } else {
+      h = RES_HEIGHT[this.resMode];
+      w = Math.max(640, Math.round(h * aspect));
+    }
+    this.renderer.setSize(w, h, false);
+    /* 480i keeps the chunky PS2 upscale; sharper modes get smooth filtering */
+    this.canvas.style.imageRendering = this.resMode === "480" ? "pixelated" : "auto";
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
+
+    /* tear down the old post chain */
+    if (this.composer) {
+      this.composer.dispose();
+      this.composer = null;
+    }
+    if (this.aaMode === "off") return;
+
+    /* MSAA samples live on the composer's render target; FXAA is a screen pass */
+    const rt = new THREE.WebGLRenderTarget(w, h, { samples: this.aaMode === "msaa" ? 4 : 0 });
+    const comp = new EffectComposer(this.renderer, rt);
+    comp.addPass(new RenderPass(this.scene, this.camera));
+    if (this.aaMode === "fxaa") {
+      const fx = new ShaderPass(FXAAShader);
+      (fx.material.uniforms["resolution"].value as THREE.Vector2).set(1 / w, 1 / h);
+      comp.addPass(fx);
+    }
+    comp.addPass(new OutputPass());
+    comp.setSize(w, h);
+    this.composer = comp;
+  }
+
   /* weapons */
   private weaponIdx = 0;
   private mags = [12, 6, 24, 60];
@@ -421,7 +498,6 @@ export class FoundryGame {
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "high-performance" });
     this.renderer.setPixelRatio(1);
-    this.renderer.setSize(VW, VH, false);
     this.renderer.toneMapping = THREE.NoToneMapping;
 
     this.scene = new THREE.Scene();
@@ -436,13 +512,26 @@ export class FoundryGame {
     this.buildFxPools();
     this.bindInput();
 
+    /* graphics settings persist between sessions */
+    try {
+      const r = localStorage.getItem("fo_res") as ResMode | null;
+      const a = localStorage.getItem("fo_aa") as AAMode | null;
+      if (r === "480" || r === "720" || r === "1080" || r === "native") this.resMode = r;
+      if (a === "off" || a === "fxaa" || a === "msaa") this.aaMode = a;
+    } catch {
+      /* private mode — defaults stand */
+    }
+    this.applyGraphics();
+    window.addEventListener("resize", this.onWinResize);
+
     this.clock.start();
     const loop = () => {
       if (this.disposed) return;
       this.raf = requestAnimationFrame(loop);
       const dt = Math.min(this.clock.getDelta(), 0.05);
       this.update(dt);
-      this.renderer.render(this.scene, this.camera);
+      if (this.composer) this.composer.render();
+      else this.renderer.render(this.scene, this.camera);
     };
     loop();
   }
@@ -451,6 +540,11 @@ export class FoundryGame {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
     this.unbindInput();
+    window.removeEventListener("resize", this.onWinResize);
+    if (this.composer) {
+      this.composer.dispose();
+      this.composer = null;
+    }
     this.renderer.dispose();
   }
 
