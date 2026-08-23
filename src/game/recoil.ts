@@ -43,6 +43,12 @@ export interface RecoilSpec {
   /** how much ADS bracing soaks the impulse, 0–1 — a shoulder-welded gun
       (LMG) is braced hard; a free-recoiling pistol barely is */
   adsBrace: number;
+  /** how much of the recoil the shooter can actively fight down while
+      aimed, 0–1. A cheek-welded semi-auto re-acquires between shots; a
+      full-auto rifle just walks and the sight picture has to be dragged
+      back down by hand. Scales the ADS corrections, the damping aid and
+      how much the hold-sway settles behind sights. */
+  adsControl: number;
 
   /* secondary axes couple linearly with the gun's recoil velocity J/M */
   yawC: number;
@@ -101,6 +107,7 @@ export const RECOIL_SPECS: RecoilSpec[] = [
     stanceRot: 0.866,
     stancePush: 8.83,
     adsBrace: 0.35,
+    adsControl: 0.55, /* a sidearm re-acquires quickly between shots */
     yawC: 0.0297,
     rollC: 0.1099,
     driftC: 0.0000184,
@@ -139,6 +146,7 @@ export const RECOIL_SPECS: RecoilSpec[] = [
     stanceRot: 3.335,
     stancePush: 3.851,
     adsBrace: 0.5,
+    adsControl: 0.55, /* semi-auto — you re-align between shells */
     yawC: 0.0828,
     rollC: 0.2329,
     driftC: 0.0000523,
@@ -179,6 +187,7 @@ export const RECOIL_SPECS: RecoilSpec[] = [
     stanceRot: 3.105,
     stancePush: 21.78,
     adsBrace: 0.35,
+    adsControl: 0.45, /* buzzy under full auto, but the light rounds stay manageable */
     yawC: 0.1018,
     rollC: 0.3486,
     driftC: 0.0000444,
@@ -219,7 +228,13 @@ export const RECOIL_SPECS: RecoilSpec[] = [
        of riding up and stacking. */
     stanceRot: 13.0,
     stancePush: 15.61,
-    adsBrace: 0.62,
+    /* without a bipod the shoulder weld soaks less than it looks — full-auto
+       7.62 still jumps, so the brace is modest... */
+    adsBrace: 0.25,
+    /* ...and the shooter can barely fight the climb while aimed. ADS buys
+       precision for the first few rounds; after that the sight picture walks
+       up and you either drag it down by hand or come off the sights. */
+    adsControl: 0.12,
     yawC: 0.1458,
     rollC: 0.32,
     driftC: 0.0000875,
@@ -408,8 +423,10 @@ export class RecoilRig {
 
     const steps = 2;
     const h = dt / steps;
-    /* a braced gun settles faster and overshoots less */
-    const zBoost = 0.25 * aimAmt;
+    /* a braced gun settles faster and overshoots less — but only as much as
+       the shooter can actually control the gun (a walking LMG gets no aid) */
+    const ctl = Math.min(1, spec.adsControl * 1.8);
+    const zBoost = 0.25 * aimAmt * (0.3 + 0.7 * ctl);
     const o = this as unknown as SpringDOF;
     /* secondary axes inherit the gun's character: a pistol's yaw snap is
        twitchy and ringing, the HOG's is a slow heavy lurch */
@@ -428,16 +445,18 @@ export class RecoilRig {
     }
 
     /* ---- camera followers: your head chases the gun exponentially —
-       guns overshoot, faces never do ---- */
-    const kf = 14 + 12 * aimAmt;
+       guns overshoot, faces never do. A controllable gun tightens up behind
+       sights; an uncontrollable one keeps lagging and lurching ---- */
+    const kf = 14 + 12 * aimAmt * (0.3 + 0.7 * ctl);
     this.camPitch += (this.pitch + this.pitchF - this.camPitch) * (1 - Math.exp(-kf * dt));
     this.camYaw += (this.yaw - this.camYaw) * (1 - Math.exp(-kf * 0.9 * dt));
 
     /* ---- human hold-sway: incommensurate sines, fatter when the arms
-       are pumped full of recoil, steadier behind a sight picture ---- */
+       are pumped full of recoil, steadier behind a sight picture — but a
+       full-auto rifle keeps shaking even when you're trying to hold it ---- */
     this.swayT += dt;
     const t = this.swayT;
-    const amp = spec.holdSway * (0.55 + 0.9 * this.burst) * (1 - 0.7 * aimAmt);
+    const amp = spec.holdSway * (0.55 + 0.9 * this.burst) * (1 - 0.7 * aimAmt * (0.35 + 0.65 * ctl));
     this.holdX = (Math.sin(t * 2.13) * 0.38 + Math.sin(t * 3.47 + 1.3) * 0.27 + Math.sin(t * 0.53 + 2.1) * 0.35) * amp;
     this.holdY = (Math.sin(t * 1.71 + 0.7) * 0.4 + Math.sin(t * 2.83 + 2.6) * 0.32 + Math.sin(t * 0.41) * 0.28) * amp;
   }
