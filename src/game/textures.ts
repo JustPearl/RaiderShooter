@@ -203,6 +203,53 @@ export function concreteTexture(): THREE.CanvasTexture {
   return finalize(c, 3);
 }
 
+/* vertical shaft gradient — bright at the window, vanishing at the floor,
+   soft horizontal edges so the beam reads as volume, not a stripe */
+export function shaftTexture(): THREE.CanvasTexture {
+  const w = 64;
+  const h = 128;
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const g = c.getContext("2d")!;
+  const img = g.createImageData(w, h);
+  for (let y = 0; y < h; y++) {
+    const v = 1 - y / h; /* v=1 at top (window) */
+    const vert = Math.pow(v, 1.25);
+    for (let x = 0; x < w; x++) {
+      const u = x / (w - 1);
+      const horiz = Math.pow(Math.sin(Math.PI * u), 0.55);
+      const a = vert * horiz * 255;
+      const i = (y * w + x) * 4;
+      img.data[i] = 255;
+      img.data[i + 1] = 255;
+      img.data[i + 2] = 255;
+      img.data[i + 3] = a;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/* soft radial pool for the light landing on the floor */
+export function poolTexture(): THREE.CanvasTexture {
+  const s = 128;
+  const c = document.createElement("canvas");
+  c.width = c.height = s;
+  const g = c.getContext("2d")!;
+  const grad = g.createRadialGradient(s / 2, s / 2, 2, s / 2, s / 2, s / 2);
+  grad.addColorStop(0, "rgba(255,255,255,0.9)");
+  grad.addColorStop(0.45, "rgba(255,255,255,0.4)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, s, s);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 export function flashTexture(): THREE.CanvasTexture {
   const s = 128;
   const c = makeCanvas(s);

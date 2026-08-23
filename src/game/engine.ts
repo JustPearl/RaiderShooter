@@ -10,6 +10,8 @@ import {
   hazardTexture,
   concreteTexture,
   flashTexture,
+  shaftTexture,
+  poolTexture,
 } from "./textures";
 
 /* ============================== Types ============================== */
@@ -327,6 +329,13 @@ export class FoundryGame {
   private flashTex: THREE.Texture[] = [];
   private muzzleFlashes: { group: THREE.Group; matA: THREE.MeshBasicMaterial; matB: THREE.MeshBasicMaterial; life: number; max: number; len: number; wid: number }[] = [];
   private flashLights: { light: THREE.PointLight; life: number }[] = [];
+  private moonLight: THREE.DirectionalLight | null = null;
+  private motePoints: THREE.Points | null = null;
+  private mPos!: Float32Array;
+  private mPh!: Float32Array;
+  private mSpd!: Float32Array;
+  private mBox!: Uint8Array;
+  private moteT = 0;
   private rings: { mesh: THREE.Mesh; life: number; speed: number }[] = [];
 
   /* waves */
@@ -658,6 +667,8 @@ export class FoundryGame {
       this.scene.add(g);
     }
 
+    this.buildWindows();
+
     /* pillars */
     const pillarMat = new THREE.MeshLambertMaterial({ map: texConcrete });
     const pillarSpots: [number, number][] = [
@@ -814,6 +825,169 @@ export class FoundryGame {
   }
 
   /* ============================== View models ============================== */
+
+  /* ============================== Windows & moonlight ============================== */
+
+  private buildWindows() {
+    const texShaft = shaftTexture();
+    const texPool = poolTexture();
+    const TILT = 0.576; /* 33° off vertical */
+    const REACH = 5.2; /* horizontal run of a shaft, window (y≈8) to floor */
+    const LEN = 9.6;
+
+    const frameMat = new THREE.MeshLambertMaterial({ color: "#23201d", flatShading: true });
+    const glassMat = new THREE.MeshBasicMaterial({ color: "#8fabc4", transparent: true, opacity: 0.96 });
+    const shaftMat = new THREE.MeshBasicMaterial({
+      map: texShaft,
+      color: "#9fc2de",
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.11,
+      side: THREE.DoubleSide,
+    });
+    const shaftMatB = shaftMat.clone();
+    shaftMatB.opacity = 0.075;
+    const poolMat = new THREE.MeshBasicMaterial({
+      map: texPool,
+      color: "#7d9fbf",
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.34,
+      side: THREE.DoubleSide,
+    });
+
+    /* one framed clerestory window, built facing +z at the origin */
+    const mkWindow = () => {
+      const g = new THREE.Group();
+      const glass = new THREE.Mesh(new THREE.PlaneGeometry(4, 3), glassMat);
+      glass.position.set(0, 8, 0);
+      g.add(glass);
+      const mkF = (w: number, h: number, x: number, y: number, d = 0.26) => {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), frameMat);
+        m.position.set(x, y, 0.08);
+        g.add(m);
+      };
+      mkF(4.5, 0.26, 0, 9.62);
+      mkF(4.5, 0.26, 0, 6.38);
+      mkF(0.26, 3.5, -2.13, 8);
+      mkF(0.26, 3.5, 2.13, 8);
+      mkF(0.11, 3, -0.68, 8, 0.2); /* mullions */
+      mkF(0.11, 3, 0.68, 8, 0.2);
+      mkF(4, 0.11, 0, 8, 0.2); /* transom */
+      const sill = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.16, 0.5), frameMat);
+      sill.position.set(0, 6.28, 0.18);
+      g.add(sill);
+      return g;
+    };
+
+    /* crossed gradient quads faking the volumetric beam */
+    const mkShaft = () => {
+      const g = new THREE.Group();
+      const a = new THREE.Mesh(new THREE.PlaneGeometry(3.6, LEN), shaftMat);
+      const b = new THREE.Mesh(new THREE.PlaneGeometry(3.6, LEN), shaftMatB);
+      b.rotation.y = 1.15;
+      g.add(a);
+      g.add(b);
+      return g;
+    };
+
+    /* ---- north wall (z = -32): five windows, shafts on the outer + middle ---- */
+    const northX = [-24, -12, 0, 12, 24];
+    for (const wx of northX) {
+      const win = mkWindow();
+      win.position.set(wx, 0, -31.32);
+      this.scene.add(win);
+    }
+    for (const wx of [-24, 0, 24]) {
+      const sh = mkShaft();
+      sh.position.set(wx, 4, -31.3 + REACH / 2);
+      sh.rotation.x = -TILT;
+      this.scene.add(sh);
+      const pool = new THREE.Mesh(new THREE.PlaneGeometry(3.8, 6.6), poolMat);
+      pool.rotation.x = -Math.PI / 2;
+      pool.position.set(wx, 0.03, -31.3 + REACH);
+      this.scene.add(pool);
+    }
+
+    /* ---- east wall (x = +32): four windows, shafts on the outer pair ---- */
+    for (const wz of [-18, -6, 6, 18]) {
+      const win = mkWindow();
+      win.rotation.y = -Math.PI / 2;
+      win.position.set(31.32, 0, wz);
+      this.scene.add(win);
+    }
+    for (const wz of [-18, 18]) {
+      const sh = mkShaft();
+      sh.position.set(31.3 - REACH / 2, 4, wz);
+      sh.rotation.z = -TILT;
+      this.scene.add(sh);
+      const pool = new THREE.Mesh(new THREE.PlaneGeometry(6.6, 3.8), poolMat);
+      pool.rotation.x = -Math.PI / 2;
+      pool.position.set(31.3 - REACH, 0.03, wz);
+      this.scene.add(pool);
+    }
+
+    /* cold directional fill so geometry on the window side actually reads lit */
+    const moon = new THREE.DirectionalLight(new THREE.Color("#86a7c8"), 0.5);
+    moon.position.set(18, 30, -46);
+    moon.target.position.set(-4, 0, 10);
+    this.scene.add(moon);
+    this.scene.add(moon.target);
+    this.moonLight = moon;
+
+    /* ---- dust motes drifting through the lit air ---- */
+    const N = 90;
+    this.mPos = new Float32Array(N * 3);
+    this.mPh = new Float32Array(N);
+    this.mSpd = new Float32Array(N);
+    this.mBox = new Uint8Array(N);
+    for (let i = 0; i < N; i++) {
+      const box = i < 58 ? 0 : 1;
+      this.mBox[i] = box;
+      this.mPh[i] = Math.random() * Math.PI * 2;
+      this.mSpd[i] = 0.1 + Math.random() * 0.26;
+      if (box === 0) {
+        this.mPos[i * 3] = -27 + Math.random() * 54;
+        this.mPos[i * 3 + 1] = 0.5 + Math.random() * 8.5;
+        this.mPos[i * 3 + 2] = -29 + Math.random() * 9;
+      } else {
+        this.mPos[i * 3] = 22 + Math.random() * 8;
+        this.mPos[i * 3 + 1] = 0.5 + Math.random() * 8.5;
+        this.mPos[i * 3 + 2] = -24 + Math.random() * 48;
+      }
+    }
+    const mg = new THREE.BufferGeometry();
+    mg.setAttribute("position", new THREE.BufferAttribute(this.mPos, 3));
+    const mm = new THREE.PointsMaterial({
+      size: 0.055,
+      color: "#b6cfe4",
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.5,
+    });
+    this.motePoints = new THREE.Points(mg, mm);
+    this.motePoints.frustumCulled = false;
+    this.scene.add(this.motePoints);
+  }
+
+  private updateMotes(dt: number) {
+    if (!this.motePoints) return;
+    this.moteT += dt;
+    const t = this.moteT;
+    for (let i = 0; i < this.mSpd.length; i++) {
+      const ph = this.mPh[i];
+      this.mPos[i * 3 + 1] += this.mSpd[i] * dt;
+      this.mPos[i * 3] += Math.sin(t * 0.31 + ph) * 0.14 * dt;
+      this.mPos[i * 3 + 2] += Math.cos(t * 0.24 + ph) * 0.11 * dt;
+      if (this.mPos[i * 3 + 1] > 9.2) this.mPos[i * 3 + 1] = 0.4;
+    }
+    (this.motePoints.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+    /* slow cloud-pass breathing on the moonlight */
+    if (this.moonLight) this.moonLight.intensity = 0.5 + Math.sin(t * 0.11) * 0.07;
+  }
 
   private buildViewModels() {
     const metal = new THREE.MeshLambertMaterial({ color: "#3d4248", flatShading: true });
@@ -1759,6 +1933,7 @@ export class FoundryGame {
     }
     for (const gl of this.gateLights) gl.intensity += (26 - gl.intensity) * Math.min(1, dt * 6);
     for (const f of this.fans) f.rotation.z += dt * 4.5;
+    this.updateMotes(dt);
 
     if (this.phase === "attract") {
       const a = t * 0.14;
