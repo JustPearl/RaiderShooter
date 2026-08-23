@@ -58,6 +58,7 @@ export default function App() {
   const hpWrap = useRef<HTMLDivElement>(null);
   const ammoText = useRef<HTMLSpanElement>(null);
   const reserveText = useRef<HTMLSpanElement>(null);
+  const ammoLineText = useRef<HTMLDivElement>(null);
   const weaponName = useRef<HTMLDivElement>(null);
   const waveText = useRef<HTMLSpanElement>(null);
   const scoreText = useRef<HTMLSpanElement>(null);
@@ -171,6 +172,7 @@ export default function App() {
         ammoText.current.style.color = h.ammo === 0 ? "#ff2e1f" : h.ammo <= 2 ? "#ffb42e" : "#ffe8c8";
       }
       if (reserveText.current) reserveText.current.textContent = h.reserve < 0 ? "∞" : String(h.reserve);
+      if (ammoLineText.current) ammoLineText.current.textContent = h.ammoLine;
       if (weaponName.current) weaponName.current.textContent = h.weaponName;
       if (waveText.current) waveText.current.textContent = String(Math.max(1, h.wave)).padStart(2, "0");
       if (scoreText.current) scoreText.current.textContent = String(h.score).padStart(6, "0");
@@ -409,6 +411,9 @@ export default function App() {
               <div ref={weaponName} className="text-[11px] font-semibold tracking-[0.3em] text-[#b8a88f]">
                 P-9 SCRAPLOCK
               </div>
+              <div ref={ammoLineText} className="mt-0.5 text-[9.5px] font-semibold tracking-[0.14em] text-[#8a7f6c]">
+                .45 ACP · 831 FPS · 5.1" BBL
+              </div>
               <div className="flex items-baseline justify-end gap-2">
                 <span ref={ammoText} className="font-display text-5xl leading-none text-[#ffe8c8] hud-shadow">
                   12
@@ -540,7 +545,7 @@ export default function App() {
                       <rect x="8" y="9" width="6" height="8" fill="#8a7f6c" />
                     </svg>
                     <p className="text-[#cdbfa8]">
-                      <span className="font-bold text-[#ffe8c8]">P-9 SCRAPLOCK</span> — rapid sidearm. Bottomless reserve. Headshots pay double.
+                      <span className="font-bold text-[#ffe8c8]">P-9 SCRAPLOCK</span> — .45 ACP sidearm. Slow, heavy rounds out of a 5.1" barrel. Bottomless reserve. Headshots pay double.
                     </p>
                   </div>
                   <div className="flex items-start gap-3">

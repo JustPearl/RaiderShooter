@@ -62,20 +62,22 @@ export interface RecoilSpec {
 export const RECOIL_SPECS: RecoilSpec[] = [
   {
     id: "P-9",
-    caliber: "9×19mm PARA",
+    caliber: ".45 ACP",
     massKg: 0.95,
     radiusGyrationM: 0.14,
     boreHeightM: 0.035,
-    impulseNs: 3.2,
+    /* 230 gr @ 830 fps + powder gas ≈ 4.3 N·s of momentum */
+    impulseNs: 4.3,
     climbFactor: 0.75,
     pushFactor: 0.25,
-    /* targets: 3.5° climb, 0.07 shove, ±0.004 yaw snap, ±0.02 roll, ±0.0025 drift, 0.025 dip */
-    stanceRot: 0.936,
-    stancePush: 7.8,
-    yawC: 0.0368,
-    rollC: 0.1258,
-    driftC: 0.0000247,
-    dropC: 0.0987,
+    /* targets: 3.5° climb, 0.07 shove, ±0.004 yaw snap, ±0.02 roll, ±0.0025 drift, 0.025 dip
+       (J-proportional constants re-scaled ×3.2/4.3 for the .45 impulse) */
+    stanceRot: 0.697,
+    stancePush: 5.8,
+    yawC: 0.0274,
+    rollC: 0.0936,
+    driftC: 0.0000184,
+    dropC: 0.0735,
     traumaGain: 0.08,
     fovGain: 1.2,
     pitchWn: 13,

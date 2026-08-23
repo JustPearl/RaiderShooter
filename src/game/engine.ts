@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { sfx } from "./audio";
 import { buildRaiderRig, updateRaiderAnim, WINDUP_TIME, type RaiderRig } from "./raider";
 import { RecoilRig, RECOIL_SPECS, RECOIL_INTENSITY } from "./recoil";
+import { AMMO, effectiveDamage, muzzleVelocity, type AmmoId, type AmmoSpec } from "./ammo";
 import { createRagdoll, impulseRagdoll, stepRagdoll, type Ragdoll } from "./ragdoll";
 import {
   floorTexture,
@@ -38,6 +39,8 @@ export interface HudData {
   reserve: number;
   weapon: number;
   weaponName: string;
+  /** live cartridge readout: designation · muzzle velocity out of this barrel */
+  ammoLine: string;
   wave: number;
   score: number;
   kills: number;
@@ -132,7 +135,10 @@ interface Pickup {
 interface WeaponDef {
   name: string;
   tag: string;
-  dmg: number;
+  /** cartridge this gun is chambered for — damage comes from the ammo card */
+  ammoId: AmmoId;
+  /** fitted barrel length, inches — longer barrels squeeze more velocity */
+  barrelIn: number;
   pellets: number;
   spread: number;
   kick: number;
@@ -153,19 +159,26 @@ const ARENA = 31;
 const UP = new THREE.Vector3(0, 1, 0);
 const TRACER_SPEED = 340; /* world units/sec the streak head travels */
 
+/* Barrel lengths are measured off the viewmodels: P-9 ~5.1" service barrel,
+   M870 18.5" cylinder, VK-9 9" stub, MG-7 22" heavy barrel. Damage is then
+   whatever the chambered load makes of that steel (see ammo.ts). */
 const WEAPONS: WeaponDef[] = [
-  { name: "P-9 SCRAPLOCK", tag: "P-9", dmg: 34, pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2, bloom: 0.052, moveMul: 1 },
-  { name: "M870 BREAKER", tag: "BREAKER", dmg: 15, pellets: 8, spread: 0.055, kick: 0.06, cooldown: 0.82, magSize: 6, reloadTime: 0.5, auto: false, fovPunch: 5, bloom: 0.02, moveMul: 1 },
+  { name: "P-9 SCRAPLOCK", tag: "P-9", ammoId: "acp45", barrelIn: 5.1, pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2, bloom: 0.052, moveMul: 1 },
+  { name: "M870 BREAKER", tag: "BREAKER", ammoId: "buck12", barrelIn: 18.5, pellets: 8, spread: 0.055, kick: 0.06, cooldown: 0.82, magSize: 6, reloadTime: 0.5, auto: false, fovPunch: 5, bloom: 0.02, moveMul: 1 },
   /* western-block prototype SMG — full-auto volume at the price of ammo,
      a long mag swap and the worst heat bloom of the three */
-  { name: "VK-9 WESPE", tag: "VK-9", dmg: 17, pellets: 1, spread: 0.013, kick: 0.0075, cooldown: 0.082, magSize: 24, reloadTime: 1.4, auto: true, fovPunch: 0.5, bloom: 0.09, moveMul: 1 },
+  { name: "VK-9 WESPE", tag: "VK-9", ammoId: "para9", barrelIn: 9.0, pellets: 1, spread: 0.013, kick: 0.0075, cooldown: 0.082, magSize: 24, reloadTime: 1.4, auto: true, fovPunch: 0.5, bloom: 0.09, moveMul: 1 },
   /* belt-fed 7.62 general-purpose gun — M60/M2 lineage. Its niche is
      SUSTAINED fire: a 60-round box, slow barrel heating and heavy stagger.
      Balanced by: DPS equal to the pistol (not above it), the slowest cyclic
      of the autos, a 2.6s belt swap, scarce 7.62, heavy climb under full
      auto and lugging the pig at 85% speed */
-  { name: "MG-7 HOG", tag: "MG-7", dmg: 26, pellets: 1, spread: 0.02, kick: 0.02, cooldown: 0.118, magSize: 60, reloadTime: 2.6, auto: true, fovPunch: 1.0, bloom: 0.07, moveMul: 0.85 },
+  { name: "MG-7 HOG", tag: "MG-7", ammoId: "nato762", barrelIn: 22.0, pellets: 1, spread: 0.02, kick: 0.02, cooldown: 0.118, magSize: 60, reloadTime: 2.6, auto: true, fovPunch: 1.0, bloom: 0.07, moveMul: 0.85 },
 ];
+
+/* damage resolved once per barrel/load pairing: stopping power × (v/vRef)² */
+const WEAPON_AMMO: AmmoSpec[] = WEAPONS.map((wp) => AMMO[wp.ammoId]);
+const WEAPON_DMG: number[] = WEAPONS.map((wp) => effectiveDamage(AMMO[wp.ammoId], wp.barrelIn));
 
 /* ============================== Skill pool ============================== */
 
@@ -1395,7 +1408,7 @@ export class FoundryGame {
            blast reads as a radial star from the POV and never repeats */
         this.tmpQ2.setFromAxisAngle(this.tmpV3.set(0, 0, 1), Math.random() * Math.PI * 2);
         f.group.quaternion.copy(this.camera.quaternion).multiply(this.tmpQ2);
-        const base = this.weaponIdx === 1 ? 1.0 : this.weaponIdx === 2 ? 0.46 : this.weaponIdx === 3 ? 0.8 : 0.62;
+        const base = WEAPON_AMMO[this.weaponIdx].flashScale;
         f.len = base * (0.8 + Math.random() * 0.45);
         f.wid = f.len * (0.78 + Math.random() * 0.3);
         f.group.scale.set(f.len, f.wid, 1);
@@ -1699,7 +1712,9 @@ export class FoundryGame {
 
     const berserkOn = this.berserk && this.hp < this.maxHp * 0.4;
     const crit = Math.random() < this.critChance;
-    const dmg = w.dmg * this.dmgMul * (berserkOn ? 1 + 0.3 * this.berserkBonus : 1) * (crit ? 3 : 1);
+    const amm = WEAPON_AMMO[this.weaponIdx];
+    /* base is the load's stopping power at this barrel's velocity */
+    const dmg = WEAPON_DMG[this.weaponIdx] * this.dmgMul * (berserkOn ? 1 + 0.3 * this.berserkBonus : 1) * (crit ? 3 : 1);
     const pellets = w.pellets + (this.weaponIdx === 1 ? this.extraPellets : 0);
 
     let anyHit = false;
@@ -1720,8 +1735,8 @@ export class FoundryGame {
           if (data.kind === "enemy") {
             anyHit = true;
             const head = hits[0].point.y - data.enemy.group.position.y > 1.42 * ENEMY_DEFS[data.enemy.kind as EnemyKind].scale;
-            const knock = this.weaponIdx === 1 ? 6.5 : this.weaponIdx === 2 ? 0.9 : this.weaponIdx === 3 ? 2.2 : 1.4;
-            this.damageEnemy(data.enemy, dmg * (head ? 2 : 1), hits[0].point, head || crit, knock, dir, w.tag, this.weaponIdx === 1 ? 11 : this.weaponIdx === 2 ? 4.2 : this.weaponIdx === 3 ? 8 : 5.5);
+            const knock = amm.knockback;
+            this.damageEnemy(data.enemy, dmg * (head ? 2 : 1), hits[0].point, head || crit, knock, dir, w.tag, amm.ragdollForce);
           } else if (data.kind === "barrel") {
             anyHit = true;
             this.hitBarrel(data.barrel, w.tag);
@@ -1731,7 +1746,7 @@ export class FoundryGame {
           }
         }
       }
-      this.spawnTracer(origin, hitPoint, this.weaponIdx === 1 ? "#ffc37e" : this.weaponIdx === 2 ? "#ffe08f" : this.weaponIdx === 3 ? "#ffb45e" : "#ffe8b0");
+      this.spawnTracer(origin, hitPoint, amm.tracer);
     }
     if (anyHit) this.shotsHit++;
     return true;
@@ -2389,6 +2404,9 @@ export class FoundryGame {
       reserve: this.weaponIdx === 0 ? -1 : this.reserves[this.weaponIdx],
       weapon: this.weaponIdx,
       weaponName: w.name,
+      ammoLine: `${WEAPON_AMMO[this.weaponIdx].designation} · ${Math.round(
+        muzzleVelocity(WEAPON_AMMO[this.weaponIdx], w.barrelIn)
+      ).toLocaleString("en-US")} FPS · ${w.barrelIn}" BBL`,
       wave: this.wave,
       score: this.score,
       kills: this.kills,
