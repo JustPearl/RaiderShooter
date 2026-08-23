@@ -1353,22 +1353,19 @@ export class FoundryGame {
     this.heat = Math.min(1, this.heat + (this.weaponIdx === 0 ? 0.36 : 0.5));
     /* ---- recoil: a springy camera climb that overshoots back to rest, a
          damped snap and slight horizontal drift — every shot rolls its own
-         magnitude. ADS bracing soaks ~35% of the horizontal drift but the
-         VERTICAL kick is 2.6x weaker when fully aimed. The viewmodel kick
+         magnitude, and bracing (ADS) soaks ~35% of it. The viewmodel kick
          is deliberately left at full strength ---- */
     const kickVar = 0.85 + Math.random() * 0.6; /* 85%–145% power per shot */
-    const brace = 1 - 0.35 * this.aimAmt; /* horizontal drift brace */
-    const braceV = 1 - 0.62 * this.aimAmt; /* vertical kick brace — 0.38 at full ADS */
-    const baseKick = w.kick * kickVar;
-    const totalKick = baseKick * brace;
+    const brace = 1 - 0.35 * this.aimAmt;
+    const totalKick = w.kick * kickVar * brace;
     /* springy climb — an upward impulse the spring carries back past rest */
-    this.recoilSpringV += baseKick * braceV * 26;
+    this.recoilSpringV += totalKick * 26;
     const sideKick = (Math.random() - 0.5) * 2 * totalKick * (this.weaponIdx === 1 ? 0.7 : 0.52);
     this.yaw += sideKick * 0.3;
     /* damped visual snap */
-    this.recoilPitch += baseKick * braceV * 0.42;
+    this.recoilPitch += totalKick * 0.42;
     this.recoilYaw += sideKick * 0.45;
-    this.fovKick += w.fovPunch * (0.6 + Math.random() * 0.4) * (1 - 0.5 * this.aimAmt);
+    this.fovKick += w.fovPunch * (0.6 + Math.random() * 0.4);
     this.vmKick = (this.weaponIdx === 1 ? 0.19 : 0.085) * kickVar;
     this.trauma = Math.min(1.4, this.trauma + (this.weaponIdx === 1 ? 0.26 : 0.08) * kickVar);
     if (this.weaponIdx === 0) this.slideT = 1;
