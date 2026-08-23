@@ -70,7 +70,7 @@ export default function App() {
   const ringWrapRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<SVGCircleElement>(null);
   const pipsRef = useRef<HTMLDivElement>(null);
-  const slotRefs = [useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null)];
+  const slotRefs = [useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null)];
   const lastWeapon = useRef(-1);
 
   /* ------- options (persisted to localStorage) ------- */
@@ -143,7 +143,7 @@ export default function App() {
           break;
         case "cleared":
           setCurWave(e.wave);
-          setBanner({ key: uid++, title: `WAVE ${String(e.wave).padStart(2, "0")} CLEARED`, sub: `+${e.bonus} SALVAGE // +10 SHELLS // +24 ROUNDS // +12 HP`, tone: "green" });
+          setBanner({ key: uid++, title: `WAVE ${String(e.wave).padStart(2, "0")} CLEARED`, sub: `+${e.bonus} SALVAGE // +10 SHELLS // +24 ROUNDS // +30 BELT // +12 HP`, tone: "green" });
           break;
         case "kill": {
           const entry = { id: uid++, text: e.text };
@@ -394,7 +394,7 @@ export default function App() {
           {/* bottom-right: weapon + ammo */}
           <div className="absolute bottom-6 right-5 flex flex-col items-end gap-2">
             <div className="flex gap-2">
-              {["1 P-9", "2 M870", "3 VK-9"].map((label, i) => (
+              {["1 P-9", "2 M870", "3 VK-9", "4 MG-7"].map((label, i) => (
                 <div
                   key={label}
                   ref={slotRefs[i]}
@@ -524,7 +524,7 @@ export default function App() {
                   <span>JUMP</span>
                   <div className="flex gap-1"><span className="keycap">R</span></div>
                   <span>RELOAD</span>
-                  <div className="flex gap-1"><span className="keycap">1</span><span className="keycap">2</span><span className="keycap">3</span><span className="keycap">WHEEL</span></div>
+                  <div className="flex gap-1"><span className="keycap">1</span><span className="keycap">2</span><span className="keycap">3</span><span className="keycap">4</span><span className="keycap">WHEEL</span></div>
                   <span>SWAP WEAPON</span>
                   <div className="flex gap-1"><span className="keycap">ESC</span></div>
                   <span>PAUSE</span>
@@ -560,6 +560,18 @@ export default function App() {
                     </svg>
                     <p className="text-[#cdbfa8]">
                       <span className="font-bold text-[#ffe8c8]">VK-9 WESPE</span> — western-block prototype. Full-auto 9mm, 24-round grip mag. Drinks ammo, blooms hot.
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <svg width="30" height="18" viewBox="0 0 30 18" className="mt-0.5 shrink-0">
+                      <rect x="2" y="5" width="13" height="6" fill="#8a8f96" />
+                      <rect x="15" y="6.5" width="13" height="3" fill="#b8a88f" />
+                      <rect x="4" y="1" width="9" height="4" fill="#4a5238" />
+                      <rect x="6" y="11" width="5" height="6" fill="#4a4f3c" />
+                      <rect x="15" y="4" width="2" height="2" fill="#b8a88f" />
+                    </svg>
+                    <p className="text-[#cdbfa8]">
+                      <span className="font-bold text-[#ffe8c8]">MG-7 HOG</span> — belt-fed 7.62. 60-round box, heavy stagger, slow barrel heat. Lugs at 85% speed, hates sprinting.
                     </p>
                   </div>
                   <div className="flex items-start gap-3">

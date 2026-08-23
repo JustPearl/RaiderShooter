@@ -141,6 +141,7 @@ interface WeaponDef {
   auto: boolean;
   fovPunch: number;
   bloom: number;
+  moveMul: number;
 }
 
 /* ============================== Engine ============================== */
@@ -152,11 +153,17 @@ const UP = new THREE.Vector3(0, 1, 0);
 const TRACER_SPEED = 340; /* world units/sec the streak head travels */
 
 const WEAPONS: WeaponDef[] = [
-  { name: "P-9 SCRAPLOCK", tag: "P-9", dmg: 34, pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2, bloom: 0.052 },
-  { name: "M870 BREAKER", tag: "BREAKER", dmg: 15, pellets: 8, spread: 0.055, kick: 0.06, cooldown: 0.82, magSize: 6, reloadTime: 0.5, auto: false, fovPunch: 5, bloom: 0.02 },
+  { name: "P-9 SCRAPLOCK", tag: "P-9", dmg: 34, pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2, bloom: 0.052, moveMul: 1 },
+  { name: "M870 BREAKER", tag: "BREAKER", dmg: 15, pellets: 8, spread: 0.055, kick: 0.06, cooldown: 0.82, magSize: 6, reloadTime: 0.5, auto: false, fovPunch: 5, bloom: 0.02, moveMul: 1 },
   /* western-block prototype SMG — full-auto volume at the price of ammo,
      a long mag swap and the worst heat bloom of the three */
-  { name: "VK-9 WESPE", tag: "VK-9", dmg: 17, pellets: 1, spread: 0.013, kick: 0.0075, cooldown: 0.082, magSize: 24, reloadTime: 1.4, auto: true, fovPunch: 0.5, bloom: 0.09 },
+  { name: "VK-9 WESPE", tag: "VK-9", dmg: 17, pellets: 1, spread: 0.013, kick: 0.0075, cooldown: 0.082, magSize: 24, reloadTime: 1.4, auto: true, fovPunch: 0.5, bloom: 0.09, moveMul: 1 },
+  /* belt-fed 7.62 general-purpose gun — M60/M2 lineage. Its niche is
+     SUSTAINED fire: a 60-round box, slow barrel heating and heavy stagger.
+     Balanced by: DPS equal to the pistol (not above it), the slowest cyclic
+     of the autos, a 2.6s belt swap, scarce 7.62, heavy climb under full
+     auto and lugging the pig at 85% speed */
+  { name: "MG-7 HOG", tag: "MG-7", dmg: 26, pellets: 1, spread: 0.02, kick: 0.02, cooldown: 0.118, magSize: 60, reloadTime: 2.6, auto: true, fovPunch: 1.0, bloom: 0.07, moveMul: 0.85 },
 ];
 
 /* ============================== Skill pool ============================== */
@@ -254,8 +261,8 @@ export class FoundryGame {
 
   /* weapons */
   private weaponIdx = 0;
-  private mags = [12, 6, 24];
-  private reserves = [Infinity, 24, 96];
+  private mags = [12, 6, 24, 60];
+  private reserves = [Infinity, 24, 96, 120];
   private fireCd = 0;
   private wState: "idle" | "lowering" | "raising" | "reloading" = "idle";
   private wT = 0;
@@ -269,6 +276,7 @@ export class FoundryGame {
   private vmSlide: THREE.Mesh | null = null;
   private vmPump: THREE.Mesh | null = null;
   private vmBolt: THREE.Mesh | null = null;
+  private vmMgBolt: THREE.Mesh | null = null;
   private slideT = 0;
   private pumpT = -1;
   private rackT = -1;
@@ -407,6 +415,7 @@ export class FoundryGame {
     if (e.code === "Digit1") this.switchTo(0);
     if (e.code === "Digit2") this.switchTo(1);
     if (e.code === "Digit3") this.switchTo(2);
+    if (e.code === "Digit4") this.switchTo(3);
     if (e.code === "KeyR") this.startReload();
   };
   private onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.code);
@@ -523,8 +532,8 @@ export class FoundryGame {
     this.yaw = Math.PI;
     this.pitch = 0;
     this.weaponIdx = 0;
-    this.mags = [WEAPONS[0].magSize, WEAPONS[1].magSize, WEAPONS[2].magSize];
-    this.reserves = [Infinity, 24, 96];
+    this.mags = WEAPONS.map((wp) => wp.magSize);
+    this.reserves = [Infinity, 24, 96, 120];
     this.wState = "idle";
     this.fireCd = 0;
     this.heat = 0;
@@ -1098,10 +1107,85 @@ export class FoundryGame {
     portK.position.set(0.048, 0.05, -0.08);
     smg.add(portK);
 
+    /* MG-7 HOG — belt-fed 7.62 general-purpose gun, M60/M2 lineage:
+       heavy receiver, long finned barrel, muzzle brake, top box mag */
+    const mg = new THREE.Group();
+    const heavy = new THREE.MeshLambertMaterial({ color: "#33383e", flatShading: true });
+    const olive = new THREE.MeshLambertMaterial({ color: "#4a4f3c", flatShading: true });
+    /* receiver — beefier than the SMG */
+    const mgBody = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.13, 0.46), heavy);
+    mgBody.position.set(0, 0.02, 0.02);
+    mg.add(mgBody);
+    /* top box mag — the belt/box feed riding over the receiver */
+    const boxMag = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.1, 0.2), olive);
+    boxMag.position.set(0, 0.135, 0.04);
+    mg.add(boxMag);
+    const boxLid = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.02, 0.21), heavy);
+    boxLid.position.set(0, 0.195, 0.04);
+    mg.add(boxLid);
+    /* feed chute from box into receiver */
+    const chute = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.1), darkMetal);
+    chute.position.set(0, 0.085, -0.06);
+    chute.rotation.x = 0.5;
+    mg.add(chute);
+    /* long heavy barrel with cooling fins */
+    const barrelM = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.036, 0.62, 10), heavy);
+    barrelM.rotation.x = Math.PI / 2;
+    barrelM.position.set(0, 0.045, -0.42);
+    mg.add(barrelM);
+    for (let i = 0; i < 4; i++) {
+      const fin = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.012, 10), metal);
+      fin.rotation.x = Math.PI / 2;
+      fin.position.set(0, 0.045, -0.24 - i * 0.12);
+      mg.add(fin);
+    }
+    /* gas tube under the barrel */
+    const gasTube = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.4, 8), darkMetal);
+    gasTube.rotation.x = Math.PI / 2;
+    gasTube.position.set(0, -0.01, -0.3);
+    mg.add(gasTube);
+    /* muzzle brake */
+    const brake = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.1, 8), metal);
+    brake.rotation.x = Math.PI / 2;
+    brake.position.set(0, 0.045, -0.74);
+    mg.add(brake);
+    for (let i = 0; i < 3; i++) {
+      const slot = new THREE.Mesh(new THREE.BoxGeometry(0.082, 0.014, 0.016), new THREE.MeshBasicMaterial({ color: "#0b0b0d" }));
+      slot.position.set(0, 0.045, -0.715 - i * 0.03);
+      mg.add(slot);
+    }
+    /* front sight post + carrying handle */
+    const mgFSight = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.06, 0.014), darkMetal);
+    mgFSight.position.set(0, 0.1, -0.55);
+    mg.add(mgFSight);
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.05, 0.14), heavy);
+    handle.position.set(0, 0.115, -0.35);
+    mg.add(handle);
+    /* reciprocating bolt / charging handle on the side */
+    const mgBolt = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.03, 0.12), new THREE.MeshLambertMaterial({ color: "#565c63", flatShading: true }));
+    mgBolt.position.set(0.06, 0.02, 0.02);
+    mg.add(mgBolt);
+    /* stock + pistol grip */
+    const mgStock = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.14, 0.26), olive);
+    mgStock.position.set(0, -0.05, 0.36);
+    mgStock.rotation.x = -0.12;
+    mg.add(mgStock);
+    const mgGrip = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.14, 0.07), grip);
+    mgGrip.position.set(0, -0.1, 0.16);
+    mgGrip.rotation.x = -0.22;
+    mg.add(mgGrip);
+    /* ejection port */
+    const portM = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.06, 0.13), new THREE.MeshBasicMaterial({ color: "#0b0b0d" }));
+    portM.position.set(0.06, 0.02, -0.04);
+    mg.add(portM);
+    const muzzleM = new THREE.Object3D();
+    muzzleM.position.set(0, 0.045, -0.8);
+    mg.add(muzzleM);
+
     const gunLight = new THREE.PointLight(new THREE.Color("#ffe8c8"), 1.1, 2.4, 1.8);
     gunLight.position.set(0.1, 0.1, -0.2);
 
-    for (const vm of [pistol, shotgun, smg]) {
+    for (const vm of [pistol, shotgun, smg, mg]) {
       vm.position.copy(this.vmBase);
       vm.visible = false;
       this.camera.add(vm);
@@ -1109,11 +1193,12 @@ export class FoundryGame {
     pistol.visible = true;
     pistol.add(gunLight);
     this.scene.add(this.camera);
-    this.vmGroups = [pistol, shotgun, smg];
-    this.vmMuzzles = [muzzleP, muzzleS, muzzleK];
+    this.vmGroups = [pistol, shotgun, smg, mg];
+    this.vmMuzzles = [muzzleP, muzzleS, muzzleK, muzzleM];
     this.vmSlide = slide;
     this.vmPump = pump;
     this.vmBolt = bolt;
+    this.vmMgBolt = mgBolt;
     this.gunLight = gunLight;
   }
 
@@ -1310,7 +1395,7 @@ export class FoundryGame {
            blast reads as a radial star from the POV and never repeats */
         this.tmpQ2.setFromAxisAngle(this.tmpV3.set(0, 0, 1), Math.random() * Math.PI * 2);
         f.group.quaternion.copy(this.camera.quaternion).multiply(this.tmpQ2);
-        const base = this.weaponIdx === 1 ? 1.0 : this.weaponIdx === 2 ? 0.46 : 0.62;
+        const base = this.weaponIdx === 1 ? 1.0 : this.weaponIdx === 2 ? 0.46 : this.weaponIdx === 3 ? 0.8 : 0.62;
         f.len = base * (0.8 + Math.random() * 0.45);
         f.wid = f.len * (0.78 + Math.random() * 0.3);
         f.group.scale.set(f.len, f.wid, 1);
@@ -1583,7 +1668,8 @@ export class FoundryGame {
     this.mags[this.weaponIdx]--;
     this.fireCd = w.cooldown / this.fireMul;
     this.shotsFired++;
-    this.heat = Math.min(1, this.heat + (this.weaponIdx === 0 ? 0.36 : 0.5));
+    /* heavy MG barrel heats slower; SMG runs hottest per second */
+    this.heat = Math.min(1, this.heat + (this.weaponIdx === 0 ? 0.36 : this.weaponIdx === 3 ? 0.22 : 0.5));
     /* ---- recoil: a springy camera climb that overshoots back to rest, a
          damped snap and slight horizontal drift — every shot rolls its own
          magnitude, and bracing (ADS) soaks ~35% of it. The viewmodel kick
@@ -1599,17 +1685,19 @@ export class FoundryGame {
     this.recoilPitch += totalKick * 0.42;
     this.recoilYaw += sideKick * 0.45;
     this.fovKick += w.fovPunch * (0.6 + Math.random() * 0.4);
-    this.vmKick = (this.weaponIdx === 1 ? 0.19 : 0.085) * kickVar;
-    this.trauma = Math.min(1.4, this.trauma + (this.weaponIdx === 1 ? 0.26 : 0.08) * kickVar);
+    this.vmKick = (this.weaponIdx === 1 ? 0.19 : this.weaponIdx === 3 ? 0.11 : 0.085) * kickVar;
+    this.trauma = Math.min(1.4, this.trauma + (this.weaponIdx === 1 ? 0.26 : this.weaponIdx === 3 ? 0.1 : 0.08) * kickVar);
     if (this.weaponIdx === 0) this.slideT = 1;
     else if (this.weaponIdx === 1) this.pumpT = 0;
     else this.slideT = 1; /* open bolt reciprocates like the pistol slide */
     this.ejectShell();
-    if (this.gunLight) this.gunLight.intensity = this.weaponIdx === 1 ? 26 : this.weaponIdx === 2 ? 9 : 14;
+    if (this.gunLight) this.gunLight.intensity = this.weaponIdx === 1 ? 26 : this.weaponIdx === 2 ? 9 : this.weaponIdx === 3 ? 17 : 14;
     if (this.weaponIdx === 1) sfx.shotgun();
     else if (this.weaponIdx === 2) sfx.smg();
+    else if (this.weaponIdx === 3) sfx.mg();
     else sfx.pistol();
-    this.notifyShot(this.weaponIdx === 1);
+    /* the heavy report startles raiders like a shotgun blast would */
+    this.notifyShot(this.weaponIdx === 1 || this.weaponIdx === 3);
     this.spawnMuzzleFlash();
 
     const spread = this.currentSpread();
@@ -1642,8 +1730,8 @@ export class FoundryGame {
           if (data.kind === "enemy") {
             anyHit = true;
             const head = hits[0].point.y - data.enemy.group.position.y > 1.42 * ENEMY_DEFS[data.enemy.kind as EnemyKind].scale;
-            const knock = this.weaponIdx === 1 ? 6.5 : this.weaponIdx === 2 ? 0.9 : 1.4;
-            this.damageEnemy(data.enemy, dmg * (head ? 2 : 1), hits[0].point, head || crit, knock, dir, w.tag, this.weaponIdx === 1 ? 11 : this.weaponIdx === 2 ? 4.2 : 5.5);
+            const knock = this.weaponIdx === 1 ? 6.5 : this.weaponIdx === 2 ? 0.9 : this.weaponIdx === 3 ? 2.2 : 1.4;
+            this.damageEnemy(data.enemy, dmg * (head ? 2 : 1), hits[0].point, head || crit, knock, dir, w.tag, this.weaponIdx === 1 ? 11 : this.weaponIdx === 2 ? 4.2 : this.weaponIdx === 3 ? 8 : 5.5);
           } else if (data.kind === "barrel") {
             anyHit = true;
             this.hitBarrel(data.barrel, w.tag);
@@ -1653,7 +1741,7 @@ export class FoundryGame {
           }
         }
       }
-      this.spawnTracer(origin, hitPoint, this.weaponIdx === 1 ? "#ffc37e" : this.weaponIdx === 2 ? "#ffe08f" : "#ffe8b0");
+      this.spawnTracer(origin, hitPoint, this.weaponIdx === 1 ? "#ffc37e" : this.weaponIdx === 2 ? "#ffe08f" : this.weaponIdx === 3 ? "#ffb45e" : "#ffe8b0");
     }
     if (anyHit) this.shotsHit++;
     return true;
@@ -1781,6 +1869,7 @@ export class FoundryGame {
     this.hp = Math.min(this.maxHp, this.hp + 12);
     this.reserves[1] = Math.min(48, this.reserves[1] + 10);
     this.reserves[2] = Math.min(144, this.reserves[2] + 24);
+    this.reserves[3] = Math.min(180, this.reserves[3] + 30);
     this.onEvent({ type: "cleared", wave: this.wave, bonus });
     sfx.waveClear();
     if (this.wave % 3 === 0) this.offerDraft();
@@ -1956,7 +2045,7 @@ export class FoundryGame {
     /* ---------- player movement ---------- */
     const sprint = this.keys.has("ShiftLeft") || this.keys.has("ShiftRight");
     const berserkSpd = this.berserk && this.hp < this.maxHp * 0.4 ? 1 + 0.15 * this.berserkBonus : 1;
-    const speed = (sprint ? 8.4 : 5.8) * (1 - 0.45 * this.aimAmt) * this.speedMul * berserkSpd;
+    const speed = (sprint ? 8.4 : 5.8) * (1 - 0.45 * this.aimAmt) * this.speedMul * berserkSpd * WEAPONS[this.weaponIdx].moveMul;
     let ix = 0;
     let iz = 0;
     if (this.keys.has("KeyW") || this.keys.has("ArrowUp")) iz -= 1;
@@ -2153,6 +2242,14 @@ export class FoundryGame {
         vy -= 0.05 * shellPh;
         vrz += 0.3 * shellPh;
         vx -= 0.03 * shellPh;
+      } else if (this.weaponIdx === 3) {
+        /* MG: nose down, swap the heavy box mag — slow deliberate tilt */
+        const prog = 1 - this.wT / this.effReload(w);
+        const dip = Math.sin(prog * Math.PI);
+        vy -= 0.24 * dip;
+        vrx = -0.6 * dip;
+        vrz += 0.3 * dip;
+        vx += 0.04 * dip;
       } else {
         /* SMG: cant the gun out and yank the grip mag */
         const prog = 1 - this.wT / this.effReload(w);
@@ -2186,6 +2283,12 @@ export class FoundryGame {
       const s = this.slideT;
       const back = s > 0.5 ? ((s - 0.5) / 0.5) * 0.07 : Math.sin((s / 0.5) * Math.PI) * 0.014;
       this.vmBolt.position.z = -0.12 + back;
+    }
+    if (this.vmMgBolt) {
+      /* heavy bolt carrier reciprocates on the side — long, weighty stroke */
+      const s = this.slideT;
+      const back = s > 0.5 ? ((s - 0.5) / 0.5) * 0.1 : Math.sin((s / 0.5) * Math.PI) * 0.02;
+      this.vmMgBolt.position.z = 0.02 + back;
     }
     if (this.vmPump) {
       let pz = 0;
@@ -2250,7 +2353,8 @@ export class FoundryGame {
         } else {
           this.reserves[1] = Math.min(48, this.reserves[1] + 6);
           this.reserves[2] = Math.min(144, this.reserves[2] + 20);
-          this.onEvent({ type: "pickup", text: "+6 SHELLS // +20 ROUNDS" });
+          this.reserves[3] = Math.min(180, this.reserves[3] + 24);
+          this.onEvent({ type: "pickup", text: "+6 SHELLS // +20 ROUNDS // +24 BELT" });
         }
         sfx.pickup(p.kind);
         p.life = 0;

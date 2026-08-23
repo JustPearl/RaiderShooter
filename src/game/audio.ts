@@ -122,6 +122,25 @@ export class SFX {
     this.noise(0.02, { type: "bandpass", freq: 2150, q: 8, gain: 0.06, delay: 0.042 });
   }
 
+  /* MG-7 HOG — a heavy 7.62 general-purpose report: slower, deeper and
+     punchier than the 9mm weapons. Full-band crack, a fixed mid-band body,
+     a real low thump (kept in the reproducible band for small speakers),
+     and a belt/link clatter tail. Per-layer jitter so the roar never loops. */
+  mg() {
+    /* full-band crack — band-limited impulse, not a high-pass hiss */
+    this.noise(0.05, { hp: 380, freq: 3400 * this.j(1), q: 0.7, gain: this.j(0.5) });
+    /* body — fixed mid band, no sweep (sweeps sound laser-y) */
+    this.noise(0.09, { hp: 240, freq: 1000 * this.j(1), q: 0.9, gain: this.j(0.42) });
+    /* chest thump — triangle so it carries harmonics basic speakers reproduce */
+    this.tone(0.11, { type: "triangle", freq: 150 * this.j(1), slideTo: 52, gain: this.j(0.4) });
+    this.noise(0.1, { type: "bandpass", freq: 320, q: 1.2, gain: this.j(0.22) });
+    /* belt + brass clatter tail */
+    this.noise(0.045, { type: "bandpass", freq: 2600 * this.j(1), q: 4, gain: 0.09, delay: 0.05 });
+    this.noise(0.04, { type: "bandpass", freq: 1700 * this.j(1), q: 5, gain: 0.07, delay: 0.085 });
+    /* one quiet factory reflection for space */
+    this.noise(0.16, { hp: 200, freq: 700, q: 0.8, gain: 0.05, delay: 0.1 });
+  }
+
   shotgun() {
     /* crack — same band-limited impulse recipe, wider */
     this.noise(0.06, { hp: 260, freq: 4000 * this.j(1), gain: this.j(0.48) });
