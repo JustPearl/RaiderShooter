@@ -147,6 +147,7 @@ const VW = 854;
 const VH = 480;
 const ARENA = 31;
 const UP = new THREE.Vector3(0, 1, 0);
+const RIGHT = new THREE.Vector3(1, 0, 0);
 
 const WEAPONS: WeaponDef[] = [
   { name: "P-9 SCRAPLOCK", tag: "P-9", dmg: 34, pellets: 1, spread: 0.008, kick: 0.014, cooldown: 0.155, magSize: 12, reloadTime: 0.95, auto: true, fovPunch: 1.2, bloom: 0.052 },
@@ -315,11 +316,16 @@ export class FoundryGame {
   private tCol!: Float32Array;
   private tLife!: Float32Array;
   private tMax!: Float32Array;
+  private tFrom!: Float32Array;
+  private tDir!: Float32Array;
+  private tBase!: Float32Array;
+  private tLen!: Float32Array;
+  private tDist!: Float32Array;
   private tNext = 0;
   private tracerLines!: THREE.LineSegments;
 
   private flashTex!: THREE.Texture;
-  private muzzleFlashes: { mesh: THREE.Mesh; life: number }[] = [];
+  private muzzleFlashes: { group: THREE.Group; matA: THREE.MeshBasicMaterial; matB: THREE.MeshBasicMaterial; life: number; max: number; len: number }[] = [];
   private flashLights: { light: THREE.PointLight; life: number }[] = [];
   private rings: { mesh: THREE.Mesh; life: number; speed: number }[] = [];
 
@@ -339,6 +345,8 @@ export class FoundryGame {
   private tmpV = new THREE.Vector3();
   private tmpV2 = new THREE.Vector3();
   private tmpV3 = new THREE.Vector3();
+  private tmpQ = new THREE.Quaternion();
+  private tmpQ2 = new THREE.Quaternion();
 
   constructor(canvas: HTMLCanvasElement, onEvent: (e: GameEvent) => void, onHud: (h: HudData) => void) {
     this.canvas = canvas;
@@ -964,12 +972,21 @@ export class FoundryGame {
     this.tracerLines.frustumCulled = false;
     this.scene.add(this.tracerLines);
 
-    const flashMat = new THREE.MeshBasicMaterial({ map: this.flashTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide });
+    /* volumetric flash: two crossed quads along the shot axis, per-entry
+       materials so each burst fades on its own clock */
+    const flashGeo = new THREE.PlaneGeometry(1, 0.34);
     for (let i = 0; i < 6; i++) {
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9), flashMat);
-      m.visible = false;
-      this.scene.add(m);
-      this.muzzleFlashes.push({ mesh: m, life: 0 });
+      const matA = new THREE.MeshBasicMaterial({ map: this.flashTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, side: THREE.DoubleSide, opacity: 0 });
+      const matB = matA.clone();
+      const group = new THREE.Group();
+      const planeA = new THREE.Mesh(flashGeo, matA);
+      const planeB = new THREE.Mesh(flashGeo, matB);
+      planeB.rotation.x = Math.PI / 2;
+      group.add(planeA);
+      group.add(planeB);
+      group.visible = false;
+      this.scene.add(group);
+      this.muzzleFlashes.push({ group, matA, matB, life: 0, max: 0.05, len: 0.5 });
     }
     for (let i = 0; i < 4; i++) {
       const l = new THREE.PointLight(new THREE.Color("#ffb45e"), 0, 16, 1.6);
@@ -1080,17 +1097,24 @@ export class FoundryGame {
   private spawnMuzzleFlash() {
     const muzzle = this.vmMuzzles[this.weaponIdx];
     muzzle.getWorldPosition(this.tmpV);
+    this.camera.getWorldDirection(this.tmpV2);
     for (const f of this.muzzleFlashes) {
       if (f.life <= 0) {
-        f.mesh.visible = true;
-        /* every flash is a different burst: rotated, stretched, jittered off-axis */
-        this.tmpV2.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
-        f.mesh.position.copy(this.tmpV).addScaledVector(this.tmpV2, 0.04);
-        f.mesh.rotation.z = Math.random() * Math.PI * 2;
-        const s = (this.weaponIdx === 1 ? 1.5 : this.weaponIdx === 2 ? 0.62 : 0.85) * (0.75 + Math.random() * 0.5);
-        f.mesh.scale.set(s * (0.8 + Math.random() * 0.4), s * (0.8 + Math.random() * 0.4), s);
-        f.mesh.lookAt(this.camera.getWorldPosition(this.tmpV2));
-        f.life = 0.05;
+        f.group.visible = true;
+        f.group.position.copy(this.tmpV).addScaledVector(this.tmpV2, 0.035);
+        /* stretch the crown along the shot axis, random roll around it —
+           a real blast is longer than it is wide and never repeats */
+        this.tmpQ.setFromUnitVectors(RIGHT, this.tmpV2);
+        this.tmpQ2.setFromAxisAngle(this.tmpV2, Math.random() * Math.PI * 2);
+        f.group.quaternion.copy(this.tmpQ2.multiply(this.tmpQ));
+        const base = this.weaponIdx === 1 ? 1.05 : this.weaponIdx === 2 ? 0.48 : 0.6;
+        f.len = base * (0.8 + Math.random() * 0.45);
+        const w = f.len * (0.5 + Math.random() * 0.4);
+        f.group.scale.set(f.len, w, w);
+        f.matA.opacity = 1;
+        f.matB.opacity = 1;
+        f.max = 0.038 + Math.random() * 0.016;
+        f.life = f.max;
         break;
       }
     }
@@ -2494,11 +2518,16 @@ export class FoundryGame {
     }
     (this.tracerLines.geometry.attributes.color as THREE.BufferAttribute).needsUpdate = true;
 
-    /* muzzle flashes */
+    /* muzzle flashes — smoothstep opacity fade, blast stretches as it dies */
     for (const f of this.muzzleFlashes) {
       if (f.life > 0) {
         f.life -= dt;
-        if (f.life <= 0) f.mesh.visible = false;
+        const k = Math.max(0, f.life / f.max);
+        const o = k * k * (3 - 2 * k);
+        f.matA.opacity = o;
+        f.matB.opacity = o;
+        f.group.scale.x = f.len * (1 + (1 - k) * 0.45);
+        if (f.life <= 0) f.group.visible = false;
       }
     }
     for (const l of this.flashLights) {

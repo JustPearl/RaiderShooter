@@ -204,25 +204,53 @@ export function concreteTexture(): THREE.CanvasTexture {
 }
 
 export function flashTexture(): THREE.CanvasTexture {
-  const s = 64;
+  const s = 128;
   const c = makeCanvas(s);
   const g = c.getContext("2d")!;
-  const grad = g.createRadialGradient(s / 2, s / 2, 2, s / 2, s / 2, s / 2);
-  grad.addColorStop(0, "rgba(255,255,230,1)");
-  grad.addColorStop(0.25, "rgba(255,190,80,0.9)");
-  grad.addColorStop(0.6, "rgba(255,110,20,0.35)");
-  grad.addColorStop(1, "rgba(255,80,0,0)");
-  g.fillStyle = grad;
-  g.fillRect(0, 0, s, s);
-  // star spikes
-  g.strokeStyle = "rgba(255,235,170,0.85)";
-  g.lineWidth = 3;
-  for (let i = 0; i < 4; i++) {
-    const a = (i * Math.PI) / 4 + 0.3;
+  const cx = s / 2;
+  const cy = s / 2;
+  g.clearRect(0, 0, s, s);
+
+  /* powder-burn crown — thin petal spikes of uneven length with dark gaps,
+     the way an actual muzzle blast vents instead of a symmetric star */
+  const petals = 6 + ((Math.random() * 3) | 0);
+  let a = Math.random() * Math.PI * 2;
+  for (let i = 0; i < petals; i++) {
+    a += ((Math.PI * 2) / petals) * (0.65 + Math.random() * 0.7);
+    const len = 30 + Math.random() * 27;
+    const halfW = 3.2 + Math.random() * 4.2;
+    const tipX = cx + Math.cos(a) * len;
+    const tipY = cy + Math.sin(a) * len;
+    const nx = -Math.sin(a);
+    const ny = Math.cos(a);
+    const grad = g.createLinearGradient(cx, cy, tipX, tipY);
+    grad.addColorStop(0, "rgba(255,255,246,0.95)");
+    grad.addColorStop(0.35, "rgba(255,198,110,0.65)");
+    grad.addColorStop(1, "rgba(255,120,30,0)");
+    g.fillStyle = grad;
     g.beginPath();
-    g.moveTo(s / 2 - Math.cos(a) * 30, s / 2 - Math.sin(a) * 30);
-    g.lineTo(s / 2 + Math.cos(a) * 30, s / 2 + Math.sin(a) * 30);
-    g.stroke();
+    g.moveTo(cx + nx * halfW, cy + ny * halfW);
+    g.lineTo(tipX, tipY);
+    g.lineTo(cx - nx * halfW, cy - ny * halfW);
+    g.closePath();
+    g.fill();
+  }
+  /* white-hot core */
+  const core = g.createRadialGradient(cx, cy, 1, cx, cy, 30);
+  core.addColorStop(0, "rgba(255,255,252,1)");
+  core.addColorStop(0.25, "rgba(255,240,196,0.95)");
+  core.addColorStop(0.55, "rgba(255,172,72,0.5)");
+  core.addColorStop(1, "rgba(255,120,40,0)");
+  g.fillStyle = core;
+  g.beginPath();
+  g.arc(cx, cy, 30, 0, Math.PI * 2);
+  g.fill();
+  /* stray incandescent specks */
+  for (let i = 0; i < 8; i++) {
+    const r = 13 + Math.random() * 24;
+    const sa = Math.random() * Math.PI * 2;
+    g.fillStyle = "rgba(255,242,205,0.75)";
+    g.fillRect(cx + Math.cos(sa) * r - 1, cy + Math.sin(sa) * r - 1, 2, 2);
   }
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
