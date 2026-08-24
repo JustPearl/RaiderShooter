@@ -183,12 +183,13 @@ export function stepRagdoll(rd: Ragdoll, group: THREE.Group, dt: number, obstacl
         pt.pp.x = pt.p.x - vx * 0.5;
         pt.pp.z = pt.p.z - vz * 0.5;
       }
-      /* arena walls */
-      const lim = 30.6;
-      if (pt.p.x < -lim) { pt.p.x = -lim; pt.pp.x = pt.p.x + vx * 0.3; }
-      if (pt.p.x > lim) { pt.p.x = lim; pt.pp.x = pt.p.x + vx * 0.3; }
-      if (pt.p.z < -lim) { pt.p.z = -lim; pt.pp.z = pt.p.z + vz * 0.3; }
-      if (pt.p.z > lim) { pt.p.z = lim; pt.pp.z = pt.p.z + vz * 0.3; }
+      /* arena shell — the hall, plus the annex extending east to x ≈ 52 */
+      const limX = 52.2;
+      const limZ = 30.6;
+      if (pt.p.x < -limZ) { pt.p.x = -limZ; pt.pp.x = pt.p.x + vx * 0.3; }
+      if (pt.p.x > limX) { pt.p.x = limX; pt.pp.x = pt.p.x + vx * 0.3; }
+      if (pt.p.z < -limZ) { pt.p.z = -limZ; pt.pp.z = pt.p.z + vz * 0.3; }
+      if (pt.p.z > limZ) { pt.p.z = limZ; pt.pp.z = pt.p.z + vz * 0.3; }
       /* crates, pillars, barriers */
       for (const o of obstacles) {
         if (pt.p.x > o.minX - pt.r && pt.p.x < o.maxX + pt.r && pt.p.z > o.minZ - pt.r && pt.p.z < o.maxZ + pt.r) {
