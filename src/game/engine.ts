@@ -1777,6 +1777,16 @@ export class FoundryGame {
   /* ---- universal gun-mod hardware (see gunmods.ts) ---- */
   private modVisuals: Record<GunModId, THREE.Object3D[]>[] = [];
   private flashLight: THREE.SpotLight | null = null;
+  /* laser hardware, re-aimed per frame so the dot sits on real geometry */
+  private laserGroups: (THREE.Group | null)[] = [null, null, null, null];
+  private laserBeams: (THREE.Line | null)[] = [null, null, null, null];
+  private laserDots: (THREE.Mesh | null)[] = [null, null, null, null];
+  /* flashlight torch anchors + their downrange aim targets */
+  private lightGroups: (THREE.Group | null)[] = [null, null, null, null];
+  private lightTargets: (THREE.Object3D | null)[] = [null, null, null, null];
+  private tmpLA = new THREE.Vector3();
+  private tmpLB = new THREE.Vector3();
+  private tmpLC = new THREE.Vector3();
 
   private buildModAttachments(vms: THREE.Group[]) {
     const steel = new THREE.MeshLambertMaterial({ color: "#5d6167", flatShading: true });
@@ -1879,17 +1889,21 @@ export class FoundryGame {
       const lensL = new THREE.Mesh(new THREE.SphereGeometry(0.008, 6, 6), new THREE.MeshBasicMaterial({ color: "#ff3020" }));
       lensL.position.set(0, -0.075, -0.066);
       laser.add(lensL);
-      const beamGeo = new THREE.BufferGeometry().setFromPoints([
-        new THREE.Vector3(0, -0.075, -0.07),
-        new THREE.Vector3(0, -0.075, -30),
-      ]);
-      const beam = new THREE.Line(beamGeo, new THREE.LineBasicMaterial({ color: "#ff3020", transparent: true, opacity: 0.5 }));
+      /* beam + dot are re-aimed every frame by updateLaser() so the dot sits
+         exactly where the beam hits — start collapsed, hidden until placed */
+      const beam = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, -0.075, -0.07), new THREE.Vector3(0, -0.075, -0.07)]),
+        new THREE.LineBasicMaterial({ color: "#ff3020", transparent: true, opacity: 0.5 })
+      );
       laser.add(beam);
       const dot = new THREE.Mesh(new THREE.SphereGeometry(0.02, 6, 6), new THREE.MeshBasicMaterial({ color: "#ff3020" }));
-      dot.position.set(0, -0.075, -2.2);
+      dot.visible = false;
       laser.add(dot);
       muzzle.add(laser);
       rec.laser.push(laser);
+      this.laserGroups[i] = laser;
+      this.laserBeams[i] = beam;
+      this.laserDots[i] = dot;
 
       /* flashlight — knurled torch, warm lens, volumetric spill cone */
       const light = new THREE.Group();
@@ -1907,27 +1921,23 @@ export class FoundryGame {
       const lens = cy(0.03, 0.03, 0.012, new THREE.MeshBasicMaterial({ color: "#fff3c4" }), 8);
       lens.position.set(0, -0.08, -0.112);
       light.add(lens);
-      const cone = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.02, 0.9, 8, 14, 1, true),
-        new THREE.MeshBasicMaterial({ color: "#ffe9a8", transparent: true, opacity: 0.05, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending })
-      );
-      cone.rotation.x = Math.PI / 2;
-      cone.position.set(0, -0.08, -4.2);
-      light.add(cone);
+      /* no fake cone — a real SpotLight (this.flashLight) is parented to this
+         torch when equipped, aimed at a far downrange target */
+      const aim = new THREE.Object3D();
+      aim.position.set(0, -0.08, -20);
+      light.add(aim);
       muzzle.add(light);
       rec.light.push(light);
+      this.lightGroups[i] = light;
+      this.lightTargets[i] = aim;
 
       return rec;
     });
 
-    /* one real spotlight on the camera, driven by the active gun's flashlight */
-    this.flashLight = new THREE.SpotLight("#ffe9c4", 0, 20, 0.5, 0.55, 1.1);
-    this.flashLight.position.set(0.15, -0.1, -0.4);
-    const target = new THREE.Object3D();
-    target.position.set(0, -0.5, -12);
-    this.camera.add(target);
-    this.flashLight.target = target;
-    this.camera.add(this.flashLight);
+    /* one real torch spotlight, re-parented to whichever gun has the
+       flashlight mounted (see refreshModVisuals). Starts dark and detached. */
+    this.flashLight = new THREE.SpotLight("#ffe9c4", 0, 26, 0.45, 0.4, 1.7);
+    this.flashLight.position.set(0, -0.08, -0.12);
   }
 
   /* show/hide each gun's mounted hardware */
@@ -1938,7 +1948,59 @@ export class FoundryGame {
         rec[id].forEach((o) => (o.visible = i === this.weaponIdx && eq === id));
       });
     });
-    if (this.flashLight) this.flashLight.intensity = eq === "light" ? (this.ownedTier.light === 2 ? 3.4 : 2.6) : 0;
+    /* mount the real torch spotlight on the active gun when the light is
+       equipped; otherwise kill it. Parenting it to the torch means the beam
+       follows the gun's bob, sway and recoil for free. */
+    if (this.flashLight) {
+      if (eq === "light") {
+        const group = this.lightGroups[this.weaponIdx];
+        const target = this.lightTargets[this.weaponIdx];
+        if (group && target) {
+          group.add(this.flashLight);
+          this.flashLight.position.set(0, -0.08, -0.12);
+          this.flashLight.target = target;
+          this.flashLight.intensity = this.ownedTier.light === 2 ? 95 : 60;
+        } else {
+          this.flashLight.intensity = 0;
+        }
+    } else {
+        this.flashLight.intensity = 0;
+      }
+    }
+  }
+
+  /* Aim the active gun's laser at whatever the beam actually hits, so the
+     dot sits on the wall / crate / raider instead of floating in space. */
+  private updateLaser() {
+    const wi = this.weaponIdx;
+    const laser = this.laserGroups[wi];
+    const beam = this.laserBeams[wi];
+    const dot = this.laserDots[wi];
+    if (!laser || !beam || !dot) return;
+    if (this.equippedMods[wi] !== "laser") {
+      dot.visible = false;
+      return;
+    }
+    laser.updateWorldMatrix(true, false);
+    /* aperture world position (the little red lens at the front) */
+    const origin = this.tmpLA.set(0, -0.075, -0.066);
+    laser.localToWorld(origin);
+    const dir = this.camera.getWorldDirection(this.tmpLB);
+    this.raycaster.set(origin, dir);
+    this.raycaster.far = 80;
+    const hits = this.raycaster.intersectObjects(this.shootables, false);
+    const dist = hits.length > 0 ? hits[0].distance : 60;
+    /* dot rests just short of the surface so it reads on top of it */
+    const dotDist = Math.max(0.06, dist - 0.04);
+    const dotWorld = this.tmpLC.copy(origin).addScaledVector(dir, dotDist);
+    dot.position.copy(laser.worldToLocal(dotWorld.clone()));
+    /* keep the dot legible at range without ballooning up close */
+    dot.scale.setScalar(Math.min(1.7, 0.55 + dist * 0.02));
+    dot.visible = true;
+    /* beam runs from the aperture to the impact point */
+    const endWorld = this.tmpLC.copy(origin).addScaledVector(dir, dist);
+    const endLocal = laser.worldToLocal(endWorld.clone());
+    beam.geometry.setFromPoints([new THREE.Vector3(0, -0.075, -0.066), endLocal]);
   }
 
   /* ============================== FX pools ============================== */
@@ -3454,6 +3516,9 @@ export class FoundryGame {
     this.camera.updateProjectionMatrix();
     this.camera.position.set(this.pos.x + shX, 1.66 + this.pos.y + this.bobY + shY, this.pos.z);
     this.camera.rotation.set(this.pitch + this.rig.camPitch + this.aimPitch, this.yaw + this.rig.camYaw + this.aimYaw, shR);
+
+    /* glue the laser dot to whatever the beam hits this frame */
+    this.updateLaser();
 
     /* ---------- HUD ---------- */
     const alive = this.enemies.filter((e) => e.state !== "dead").length + this.queuedCount();
