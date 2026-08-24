@@ -1905,7 +1905,8 @@ export class FoundryGame {
       this.laserBeams[i] = beam;
       this.laserDots[i] = dot;
 
-      /* flashlight — knurled torch, warm lens, volumetric spill cone */
+      /* flashlight — knurled torch and warm lens; the actual light is a real
+         SpotLight mounted here when equipped (no fake volumetric cone) */
       const light = new THREE.Group();
       const torch = cy(0.032, 0.038, 0.12, dark, 8);
       torch.position.set(0, -0.08, -0.05);
@@ -1997,10 +1998,13 @@ export class FoundryGame {
     /* keep the dot legible at range without ballooning up close */
     dot.scale.setScalar(Math.min(1.7, 0.55 + dist * 0.02));
     dot.visible = true;
-    /* beam runs from the aperture to the impact point */
+    /* beam runs from the aperture to the impact point — mutate the existing
+       attribute in place so no geometry is allocated per frame */
     const endWorld = this.tmpLC.copy(origin).addScaledVector(dir, dist);
     const endLocal = laser.worldToLocal(endWorld.clone());
-    beam.geometry.setFromPoints([new THREE.Vector3(0, -0.075, -0.066), endLocal]);
+    const pos = beam.geometry.getAttribute("position") as THREE.BufferAttribute;
+    pos.setXYZ(1, endLocal.x, endLocal.y, endLocal.z);
+    pos.needsUpdate = true;
   }
 
   /* ============================== FX pools ============================== */
