@@ -59,6 +59,8 @@ export interface HudData {
   spreadGap: number;
   reloading: boolean;
   reloadT: number;
+  /** true when the chambered mag is nearly empty */
+  lowAmmo: boolean;
   combo: number;
   enemiesLeft: number;
 }
@@ -68,7 +70,7 @@ export type GameEvent =
   | { type: "paused" }
   | { type: "dead"; stats: FinalStats }
   | { type: "hitmarker"; head: boolean; kill: boolean }
-  | { type: "damage" }
+  | { type: "damage"; angle: number }
   | { type: "wave"; wave: number; count: number }
   | { type: "cleared"; wave: number; bonus: number }
   | { type: "kill"; text: string }
@@ -361,6 +363,10 @@ export class FoundryGame {
   private trauma = 0;
   private fovKick = 0;
   private lastLandVy = 0;
+  /* polish timers — hitstop on kill, low-hp heartbeat, furnace embers */
+  private hitstop = 0;
+  private heartT = 0;
+  private emberT = 0;
   private keys = new Set<string>();
   private firing = false;
   private mouseDX = 0;
@@ -2556,6 +2562,7 @@ export class FoundryGame {
     impulseRagdoll(e.ragdoll, point, dir, force, e.mvx, e.mvz);
     this.removeEnemyFromShootables(e);
     this.kills++;
+    this.hitstop = 0.045; /* a beat of frozen time sells the kill */
     this.combo = this.comboT > 0 ? this.combo + 1 : 1;
     this.comboT = 2.6;
     const mult = Math.min(this.combo, 8);
@@ -2966,7 +2973,16 @@ export class FoundryGame {
       return;
     }
     this.trauma = Math.min(1.5, this.trauma + 0.55);
-    this.onEvent({ type: "damage" });
+    /* attacker bearing relative to the player's facing, for the damage arc */
+    let dmgAngle = 0;
+    if (from) {
+      const toX = from.x - this.pos.x;
+      const toZ = from.z - this.pos.z;
+      const fwd = toX * -Math.sin(this.yaw) + toZ * -Math.cos(this.yaw);
+      const rgt = toX * Math.cos(this.yaw) + toZ * -Math.sin(this.yaw);
+      dmgAngle = Math.atan2(rgt, fwd); /* 0 = ahead, + = right, ±π = behind */
+    }
+    this.onEvent({ type: "damage", angle: dmgAngle });
     sfx.hurt();
     if (from) {
       const dx = this.pos.x - from.x;
@@ -3319,7 +3335,12 @@ export class FoundryGame {
   private update(rawDt: number) {
     const t = this.clock.elapsedTime;
     const slow = this.phase === "dead" ? 0.35 : 1;
-    const dt = rawDt * slow;
+    let dt = rawDt * slow;
+    /* micro hit-stop on a fresh kill — the world blinks, then catches up */
+    if (this.hitstop > 0) {
+      this.hitstop -= rawDt;
+      dt *= 0.15;
+    }
 
     /* ambient life */
     for (const l of this.lamps) {
@@ -3331,6 +3352,13 @@ export class FoundryGame {
     for (const gl of this.gateLights) gl.intensity += (26 - gl.intensity) * Math.min(1, dt * 6);
     for (const f of this.fans) f.rotation.z += dt * 4.5;
     this.updateMotes(dt);
+    /* furnace embers — a few live sparks drift up from the smelter mouth */
+    this.emberT -= dt;
+    if (this.emberT <= 0) {
+      this.emberT = 0.4 + Math.random() * 0.3;
+      this.tmpV3.set((Math.random() - 0.5) * 1.6, 1.7 + Math.random() * 0.4, 1.2 + (Math.random() - 0.5) * 0.5);
+      this.spawnParticles(this.tmpV3.clone(), 2, ["#ff6b1a", "#ffb42e", "#ff9040"], 0.5, 1.1, -1.6);
+    }
 
     if (this.phase === "attract") {
       const a = t * 0.14;
@@ -3432,6 +3460,16 @@ export class FoundryGame {
     this.regenT += dt;
     if (this.regenT > 5 && this.hp > 0 && this.hp < 100) this.hp = Math.min(100, this.hp + 4 * dt);
 
+    /* low-integrity heartbeat — faster and louder the closer to scrap */
+    if (this.phase === "playing" && this.hp > 0 && this.hp < 30) {
+      this.heartT -= dt;
+      if (this.heartT <= 0) {
+        const urgency = 1 - this.hp / 30; /* 0 at 30hp → 1 at 0hp */
+        this.heartT = 1.05 - urgency * 0.55;
+        sfx.heartbeat(0.5 + urgency * 0.5);
+      }
+    }
+
     /* ---------- weapons ---------- */
     this.fireCd -= dt;
     this.heat = Math.max(0, this.heat - dt * WEAPONS[this.weaponIdx].bloomRecover);
@@ -3464,6 +3502,7 @@ export class FoundryGame {
           this.wT = 0.2;
         } else {
           this.wState = "idle";
+          sfx.equip(this.weaponIdx); /* each gun announces itself as it comes up */
         }
       }
     } else if (this.wState === "reloading") {
@@ -3749,6 +3788,7 @@ export class FoundryGame {
           : this.weaponIdx === 1
             ? Math.min(1, this.shellT / this.effReload(w))
             : Math.min(1, 1 - this.wT / this.effReload(w)),
+      lowAmmo: this.mags[this.weaponIdx] <= Math.ceil(this.effMagSize(this.weaponIdx) * 0.25),
       combo: this.combo > 1 ? this.combo : 0,
       enemiesLeft: this.waveMode === "active" ? alive : 0,
     });
