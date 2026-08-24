@@ -74,7 +74,8 @@ export type GameEvent =
   | { type: "kill"; text: string }
   | { type: "pickup"; text: string }
   | { type: "draft"; cards: SkillCard[] }
-  | { type: "locker"; open: boolean; owned: string[]; tiers: Record<string, number>; equipped: (string | null)[] };
+  | { type: "locker"; open: boolean; owned: string[]; tiers: Record<string, number>; equipped: (string | null)[] }
+  | { type: "debug"; on: boolean };
 
 export interface FinalStats {
   wave: number;
@@ -632,6 +633,11 @@ export class FoundryGame {
     /* Gun Locker opens from the floor or the pause screen */
     if (e.code === "KeyB" && (this.phase === "playing" || this.phase === "paused")) {
       this.toggleLocker();
+      return;
+    }
+    /* F9 — debug toggle: god mode + full Mk.II locker */
+    if (e.code === "F9") {
+      this.toggleDebug();
       return;
     }
     if (this.phase !== "playing") return;
@@ -2786,6 +2792,7 @@ export class FoundryGame {
 
   private damagePlayer(dmg: number, from?: THREE.Vector3, projectile = false) {
     if (this.phase !== "playing") return;
+    if (this.debug) return; /* god mode — the foundry can't touch you */
     this.hp = Math.max(0, this.hp - dmg * (1 - this.dmgResist));
     this.regenT = 0;
     if (this.hp <= 0 && this.secondWind && !this.secondWindUsed) {
@@ -3045,6 +3052,32 @@ export class FoundryGame {
     this.refreshModVisuals();
     sfx.reload(0);
     this.emitLocker(this.lockerOpen);
+  }
+
+  /* ============================== debug ============================== */
+
+  private debug = false;
+
+  /** F9 — toggle god mode, grant the full Mk.II locker and top everything up.
+      Parts stay granted when it's switched off; only the invincibility goes. */
+  toggleDebug() {
+    if (this.phase !== "playing" && this.phase !== "paused") return;
+    this.debug = !this.debug;
+    if (this.debug) {
+      for (const m of GUN_MODS) {
+        if (!this.ownedMods.includes(m.id)) this.ownedMods.push(m.id);
+        this.ownedTier[m.id] = 2;
+      }
+      /* mount the laser on every rail so the aim ray is visible everywhere */
+      this.equippedMods = ["laser", "laser", "laser", "laser"];
+      this.refreshModVisuals();
+      /* full heal, full mags, full reserves */
+      this.hp = this.maxHp;
+      this.mags = WEAPONS.map((wp, i) => this.effMagSize(i) || wp.magSize);
+      this.reserves = [Infinity, this.reserveCap(1), this.reserveCap(2), this.reserveCap(3)];
+      sfx.waveClear();
+    }
+    this.onEvent({ type: "debug", on: this.debug });
   }
 
   private applyCard(id: string) {
