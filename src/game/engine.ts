@@ -3,6 +3,7 @@ import { sfx } from "./audio";
 import { buildRaiderRig, updateRaiderAnim, WINDUP_TIME, type RaiderRig } from "./raider";
 import { RecoilRig, RECOIL_SPECS, RECOIL_INTENSITY } from "./recoil";
 import { GUN_MODS, tierLabel, type GunModId } from "./gunmods";
+import { GUN_RECOIL, GunRecoilDriver } from "./gunrecoil";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
@@ -459,8 +460,8 @@ export class FoundryGame {
   private vmPump: THREE.Mesh | null = null;
   private vmBolt: THREE.Mesh | null = null;
   private vmMgBolt: THREE.Mesh | null = null;
-  private slideT = 0;
-  private pumpT = -1;
+  /* per-weapon viewmodel recoil choreography (see gunrecoil.ts) */
+  private vmRecoil: GunRecoilDriver[] = [0, 1, 2, 3].map((i) => new GunRecoilDriver(GUN_RECOIL[i]));
   private rackT = -1;
   private aimAmt = 0;
   private aiming = false;
@@ -580,6 +581,8 @@ export class FoundryGame {
 
     this.buildWorld();
     this.buildViewModels();
+    /* the pump-action beats of the BREAKER are driven by its recoil rig */
+    this.vmRecoil[1].onMech = () => sfx.pump();
     this.buildFxPools();
     this.bindInput();
 
@@ -842,9 +845,8 @@ export class FoundryGame {
     this.swayY = 0;
     this.swayVX = 0;
     this.swayVY = 0;
-    this.slideT = 0;
-    this.pumpT = -1;
     this.rackT = -1;
+    for (const d of this.vmRecoil) d.settle();
     this.startIntermission();
   }
 
@@ -2454,6 +2456,7 @@ export class FoundryGame {
     const now = performance.now();
     if (now - this.lastSwitchT < 120) return;
     this.lastSwitchT = now;
+    this.vmRecoil[this.weaponIdx].settle(); /* holster the old gun's kick cleanly */
     this.pendingWeapon = idx;
     this.wState = "lowering";
     this.wT = 0.16;
@@ -2567,6 +2570,7 @@ export class FoundryGame {
       /* shotgun reload interrupt — rack what you have */
       this.wState = "idle";
       this.rackT = 0;
+      sfx.pump();
     } else if (this.wState === "reloading") {
       return false;
     }
@@ -2579,6 +2583,8 @@ export class FoundryGame {
        the cone until only bursts are accurate. */
     this.heat = Math.min(1, this.heat + w.bloomRate);
     this.kickSpread = Math.min(0.06, this.kickSpread + w.spreadKick);
+    /* viewmodel recoil choreography — each gun kicks in its own character */
+    this.vmRecoil[this.weaponIdx].fire();
     /* ---- data-driven recoil (see recoil.ts): the gun's caliber, mass,
        bore height and body contact points solve the impulse — climb torque
        J·h/I, shoulder shove J/M, yaw/roll/drift from the gun's recoil
@@ -2588,9 +2594,6 @@ export class FoundryGame {
     this.yaw += this.rig.fire(this.rigSpec, this.aimAmt, recoilScale);
     this.fovKick += this.rigSpec.fovGain * this.rig.variance * RECOIL_INTENSITY * recoilScale * (0.6 + Math.random() * 0.4);
     this.trauma = Math.min(1.4, this.trauma + this.rigSpec.traumaGain * this.rig.variance * RECOIL_INTENSITY * recoilScale);
-    if (this.weaponIdx === 0) this.slideT = 1;
-    else if (this.weaponIdx === 1) this.pumpT = 0;
-    else this.slideT = 1; /* open bolt reciprocates like the pistol slide */
     this.ejectShell();
     const suppressed = this.hasMod("suppressor");
     if (suppressed) {
@@ -3256,15 +3259,10 @@ export class FoundryGame {
     const swY = Math.max(-0.07, Math.min(0.07, this.swayY));
 
     /* ---------- weapon timers ---------- */
-    this.slideT = Math.max(0, this.slideT - dt * 7.5);
-    if (this.pumpT >= 0) {
-      this.pumpT += dt;
-      if (this.pumpT > 0.16 && this.pumpT - dt <= 0.16) sfx.pump();
-      if (this.pumpT > 0.42) this.pumpT = -1;
-    }
+    /* the active gun's recoil choreography advances every frame */
+    this.vmRecoil[this.weaponIdx].update(dt);
     if (this.rackT >= 0) {
       this.rackT += dt;
-      if (this.rackT > 0.14 && this.rackT - dt <= 0.14) sfx.pump();
       if (this.rackT > 0.36) this.rackT = -1;
     }
 
@@ -3279,21 +3277,20 @@ export class FoundryGame {
        aiming only calms it by swaySettle. A hog never truly settles, so its
        model keeps lurching even when braced — the visual echo of its spread. */
     const sway = w.swayAmp * (1 - aim * 0.85 * w.swaySettle);
-    /* recoil rig drives the gun body: shove into the shoulder, muzzle lever,
-       horizontal snap and barrel torque — the horizon itself never rolls.
-       The gun shows the FULL motion (crack + heave); only the camera is
-       smoothed by its follower, so the gun visibly leads the eye. */
-    const rigPush = Math.min(this.rig.push * 1.5, 0.26);
-    const gunPitch = this.rig.pitch + this.rig.pitchF;
+    /* per-weapon recoil choreography (see gunrecoil.ts): every gun kicks in
+       its own voice — the pistol snaps, the breaker shoves and racks, the
+       wespe chatters, the hog heaves and hangs. The camera keeps its own
+       smoothed feel, so the gun visibly leads the eye. */
+    const rp = this.vmRecoil[this.weaponIdx].pose();
     /* human hold-sway — a held gun never sits perfectly still */
     const hsx = this.rig.holdX;
     const hsy = this.rig.holdY;
-    let vy = baseY + this.bobY * 0.6 * idleAmp + Math.sin(this.bobT) * bobAmp * 0.6 * idleAmp - swY * 0.4 * sway - this.rig.drop + hsy * 0.009 * sway;
+    let vy = baseY + this.bobY * 0.6 * idleAmp + Math.sin(this.bobT) * bobAmp * 0.6 * idleAmp - swY * 0.4 * sway - rp.dip + hsy * 0.009 * sway;
     let vx = baseX + Math.sin(this.bobT * 0.5) * bobAmp * 0.4 * idleAmp + swX * 0.45 * sway + hsx * 0.012 * sway;
-    let vz = baseZ + rigPush + swY * 0.12 * sway;
-    let vrx = gunPitch * 2.2 + swY * 1.1 * sway + hsy * 0.02 * sway;
-    let vry = -swX * 0.9 * sway + this.rig.yaw * 6 + hsx * 0.022 * sway;
-    let vrz = Math.sin(this.bobT) * bobAmp * 0.3 * idleAmp + swX * 0.5 * sway + this.rig.roll * 2.5;
+    let vz = baseZ + rp.push + swY * 0.12 * sway;
+    let vrx = rp.rise + swY * 1.1 * sway + hsy * 0.02 * sway;
+    let vry = -swX * 0.9 * sway + hsx * 0.022 * sway;
+    let vrz = Math.sin(this.bobT) * bobAmp * 0.3 * idleAmp + swX * 0.5 * sway + rp.roll;
 
     if (this.wState === "lowering") vy -= 0.35 * (1 - this.wT / 0.16);
     if (this.wState === "raising") vy -= 0.35 * (this.wT / 0.2);
@@ -3344,33 +3341,17 @@ export class FoundryGame {
     vm.position.set(vx, vy, vz);
     vm.rotation.set(vrx, vry, vrz);
 
-    /* ---------- animated gun parts ---------- */
-    if (this.vmSlide) {
-      /* reciprocating slide: snaps back, springs forward with overshoot */
-      const s = this.slideT;
-      const back = s > 0.55 ? ((s - 0.55) / 0.45) * 0.055 : Math.sin((s / 0.55) * Math.PI) * 0.02;
-      this.vmSlide.position.z = -0.08 + back;
-    }
-    if (this.vmBolt) {
-      /* open bolt slams back and returns — shorter, harsher stroke than the slide */
-      const s = this.slideT;
-      const back = s > 0.5 ? ((s - 0.5) / 0.5) * 0.07 : Math.sin((s / 0.5) * Math.PI) * 0.014;
-      this.vmBolt.position.z = -0.12 + back;
-    }
-    if (this.vmMgBolt) {
-      /* heavy bolt carrier reciprocates on the side — long, weighty stroke */
-      const s = this.slideT;
-      const back = s > 0.5 ? ((s - 0.5) / 0.5) * 0.1 : Math.sin((s / 0.5) * Math.PI) * 0.02;
-      this.vmMgBolt.position.z = 0.02 + back;
-    }
+    /* ---------- animated gun parts ----------
+       the recoil driver hands each gun its operating-part stroke: the slide
+       whips, the open bolt buzzes, the heavy carrier drags, the pump racks. */
+    const mech = rp.mech;
+    if (this.vmSlide) this.vmSlide.position.z = -0.08 + (this.weaponIdx === 0 ? mech : 0);
+    if (this.vmBolt) this.vmBolt.position.z = -0.12 + (this.weaponIdx === 2 ? mech : 0);
+    if (this.vmMgBolt) this.vmMgBolt.position.z = 0.02 + (this.weaponIdx === 3 ? mech : 0);
     if (this.vmPump) {
-      let pz = 0;
-      if (this.pumpT >= 0) {
-        const pt = this.pumpT;
-        if (pt < 0.2) pz = Math.sin((pt / 0.2) * Math.PI * 0.5) * 0.075;
-        else pz = Math.cos(((pt - 0.2) / 0.22) * Math.PI * 0.5) * 0.075;
-      } else if (this.rackT >= 0) {
-        pz = Math.sin(Math.min(1, this.rackT / 0.36) * Math.PI) * 0.06;
+      let pz = this.weaponIdx === 1 ? mech : 0;
+      if (this.rackT >= 0) {
+        pz = Math.max(pz, Math.sin(Math.min(1, this.rackT / 0.36) * Math.PI) * 0.06);
       } else if (this.wState === "reloading" && this.weaponIdx === 1) {
         pz = Math.sin((this.shellT / this.effReload(w)) * Math.PI) * 0.02;
       }
