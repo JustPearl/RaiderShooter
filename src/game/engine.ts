@@ -59,6 +59,8 @@ export interface HudData {
   spreadGap: number;
   reloading: boolean;
   reloadT: number;
+  /** true when the chambered mag is nearly empty */
+  lowAmmo: boolean;
   combo: number;
   enemiesLeft: number;
 }
@@ -68,13 +70,14 @@ export type GameEvent =
   | { type: "paused" }
   | { type: "dead"; stats: FinalStats }
   | { type: "hitmarker"; head: boolean; kill: boolean }
-  | { type: "damage" }
+  | { type: "damage"; angle: number }
   | { type: "wave"; wave: number; count: number }
   | { type: "cleared"; wave: number; bonus: number }
   | { type: "kill"; text: string }
   | { type: "pickup"; text: string }
   | { type: "draft"; cards: SkillCard[] }
-  | { type: "locker"; open: boolean; owned: string[]; tiers: Record<string, number>; equipped: (string | null)[] };
+  | { type: "locker"; open: boolean; owned: string[]; tiers: Record<string, number>; equipped: (string | null)[] }
+  | { type: "debug"; on: boolean };
 
 export interface FinalStats {
   wave: number;
@@ -360,6 +363,10 @@ export class FoundryGame {
   private trauma = 0;
   private fovKick = 0;
   private lastLandVy = 0;
+  /* polish timers — hitstop on kill, low-hp heartbeat, furnace embers */
+  private hitstop = 0;
+  private heartT = 0;
+  private emberT = 0;
   private keys = new Set<string>();
   private firing = false;
   private mouseDX = 0;
@@ -574,7 +581,8 @@ export class FoundryGame {
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color("#161008");
-    this.scene.fog = new THREE.FogExp2(new THREE.Color("#161008"), 0.026);
+    /* slightly lifted so the annex back wall stays readable from the hall */
+    this.scene.fog = new THREE.FogExp2(new THREE.Color("#161008"), 0.021);
 
     this.camera = new THREE.PerspectiveCamera(75, VW / VH, 0.05, 120);
     this.camera.rotation.order = "YXZ";
@@ -632,6 +640,11 @@ export class FoundryGame {
     /* Gun Locker opens from the floor or the pause screen */
     if (e.code === "KeyB" && (this.phase === "playing" || this.phase === "paused")) {
       this.toggleLocker();
+      return;
+    }
+    /* F9 — debug toggle: god mode + full Mk.II locker */
+    if (e.code === "F9") {
+      this.toggleDebug();
       return;
     }
     if (this.phase !== "playing") return;
@@ -905,7 +918,22 @@ export class FoundryGame {
     mkWall(ARENA * 2 + 4, 0, -ARENA - 1, 0);
     mkWall(ARENA * 2 + 4, 0, ARENA + 1, 0);
     mkWall(ARENA * 2 + 4, -ARENA - 1, 0, Math.PI / 2);
-    mkWall(ARENA * 2 + 4, ARENA + 1, 0, Math.PI / 2);
+    /* the east wall is split around a wide doorway (z −5..+5) that opens
+       into the boiler annex; a lintel keeps the wall above the opening */
+    mkWall(28, ARENA + 1, -19, Math.PI / 2);
+    mkWall(28, ARENA + 1, 19, Math.PI / 2);
+    const lintel = new THREE.Mesh(new THREE.BoxGeometry(1.2, wallH - 4.6, 10), wallMat);
+    lintel.position.set(ARENA + 1, 4.6 + (wallH - 4.6) / 2, 0);
+    lintel.userData.hit = { kind: "solid" };
+    this.scene.add(lintel);
+    this.shootables.push(lintel);
+    /* walls are collidable boxes (the annex doorway has to be real geometry,
+       not the old square clamp) */
+    this.addObstacle(0, -ARENA - 1, ARENA + 2, 0.6);
+    this.addObstacle(0, ARENA + 1, ARENA + 2, 0.6);
+    this.addObstacle(-ARENA - 1, 0, 0.6, ARENA + 2);
+    this.addObstacle(ARENA + 1, -19, 0.6, 14);
+    this.addObstacle(ARENA + 1, 19, 0.6, 14);
 
     /* hazard trim strips along wall bases */
     const trimMat = new THREE.MeshLambertMaterial({ map: texHazard });
@@ -918,7 +946,143 @@ export class FoundryGame {
     mkTrim(ARENA * 2 + 4, 0, -ARENA - 1, 0);
     mkTrim(ARENA * 2 + 4, 0, ARENA + 1, 0);
     mkTrim(ARENA * 2 + 4, -ARENA - 1, 0, Math.PI / 2);
-    mkTrim(ARENA * 2 + 4, ARENA + 1, 0, Math.PI / 2);
+    mkTrim(28, ARENA + 1, -19, Math.PI / 2);
+    mkTrim(28, ARENA + 1, 19, Math.PI / 2);
+    /* door jambs in hazard paint + a wall sign over the opening */
+    for (const jz of [-5.3, 5.3]) {
+      const jamb = new THREE.Mesh(new THREE.BoxGeometry(1.3, 4.6, 0.6), trimMat);
+      jamb.position.set(ARENA + 1, 2.3, jz);
+      this.scene.add(jamb);
+      this.addObstacle(ARENA + 1, jz, 0.65, 0.3);
+    }
+    const doorSign = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.1, 5.4), trimMat);
+    doorSign.position.set(ARENA + 0.3, 5.5, 0);
+    this.scene.add(doorSign);
+
+    /* ============================== boiler annex ==============================
+       A second room east of the foundry hall (x 32..53, z ±17) — tighter,
+       darker, lit by two furnace boilers and a cold window on the back wall. */
+    const ANX_X = 53; /* back wall */
+    const ANX_Z = 17; /* half-depth */
+    /* floor — same plates, grubbier tint, tile scale matched to the hall */
+    const texFloorAnx = texFloor.clone();
+    texFloorAnx.repeat.set(3.4, 5.3);
+    texFloorAnx.needsUpdate = true;
+    const floorAnx = new THREE.Mesh(
+      new THREE.PlaneGeometry(ANX_X - ARENA + 3, ANX_Z * 2 + 3),
+      new THREE.MeshLambertMaterial({ map: texFloorAnx, color: "#a89a8c" })
+    );
+    floorAnx.rotation.x = -Math.PI / 2;
+    floorAnx.position.set((ARENA + ANX_X) / 2 + 0.5, 0.001, 0);
+    floorAnx.userData.hit = { kind: "solid" };
+    this.scene.add(floorAnx);
+    this.shootables.push(floorAnx);
+    /* walls + base trim */
+    mkWall(ANX_Z * 2 + 3, ANX_X, 0, Math.PI / 2); /* back */
+    mkWall(ANX_X - ARENA + 3, (ARENA + ANX_X) / 2 + 0.5, -ANX_Z, 0); /* north */
+    mkWall(ANX_X - ARENA + 3, (ARENA + ANX_X) / 2 + 0.5, ANX_Z, 0); /* south */
+    mkTrim(ANX_Z * 2 + 3, ANX_X, 0, Math.PI / 2);
+    mkTrim(ANX_X - ARENA + 3, (ARENA + ANX_X) / 2 + 0.5, -ANX_Z, 0);
+    mkTrim(ANX_X - ARENA + 3, (ARENA + ANX_X) / 2 + 0.5, ANX_Z, 0);
+    /* colliders */
+    this.addObstacle(ANX_X, 0, 0.6, ANX_Z + 1.5);
+    this.addObstacle((ARENA + ANX_X) / 2 + 0.5, -ANX_Z, (ANX_X - ARENA) / 2 + 1.6, 0.6);
+    this.addObstacle((ARENA + ANX_X) / 2 + 0.5, ANX_Z, (ANX_X - ARENA) / 2 + 1.6, 0.6);
+    /* roof beam */
+    const beamAnx = new THREE.Mesh(new THREE.BoxGeometry(ANX_X - ARENA + 3, 0.7, 1.1), beamMat);
+    beamAnx.position.set((ARENA + ANX_X) / 2 + 0.5, 10.4, 0);
+    this.scene.add(beamAnx);
+
+    /* the boilers — two riveted tanks glowing from their peep doors */
+    const boilerMat = new THREE.MeshLambertMaterial({ color: "#3a3f45", flatShading: true });
+    const boilerBand = new THREE.MeshLambertMaterial({ color: "#2a2e33", flatShading: true });
+    const boilerSpots: [number, number][] = [
+      [39, -10],
+      [47, 8],
+    ];
+    for (const [bx, bz] of boilerSpots) {
+      const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.6, 5.6, 12), boilerMat);
+      tank.position.set(bx, 2.8, bz);
+      tank.userData.hit = { kind: "solid" };
+      this.scene.add(tank);
+      this.shootables.push(tank);
+      this.addObstacle(bx, bz, 1.7, 1.7);
+      for (const by of [1.6, 4.0]) {
+        const band = new THREE.Mesh(new THREE.CylinderGeometry(1.62, 1.62, 0.28, 12), boilerBand);
+        band.position.set(bx, by, bz);
+        this.scene.add(band);
+      }
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(1.5, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), boilerMat);
+      dome.position.set(bx, 5.6, bz);
+      this.scene.add(dome);
+      /* the fire peep — faces the doorway */
+      const peepDir = new THREE.Vector3(32.5 - bx, 0, -bz).normalize();
+      const peep = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.0, 0.14), new THREE.MeshBasicMaterial({ color: "#ff6b1a" }));
+      peep.position.set(bx + peepDir.x * 1.52, 2.2, bz + peepDir.z * 1.52);
+      peep.lookAt(bx + peepDir.x * 4, 2.2, bz + peepDir.z * 4);
+      this.scene.add(peep);
+      const bl = new THREE.PointLight(new THREE.Color("#ff6b1a"), 30, 14, 1.6);
+      bl.position.set(bx + peepDir.x * 2.2, 2.6, bz + peepDir.z * 2.2);
+      this.scene.add(bl);
+      /* stack pipe up through the roof */
+      const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.34, 5.2, 8), boilerBand);
+      stack.position.set(bx, 7.9, bz);
+      this.scene.add(stack);
+    }
+
+    /* pipe rack along the back wall */
+    const pipeCols = ["#5d6167", "#7a4a2a", "#5d6167"];
+    for (let i = 0; i < 3; i++) {
+      const pipe = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.15, 0.15, ANX_Z * 2 - 2, 8),
+        new THREE.MeshLambertMaterial({ color: pipeCols[i], flatShading: true })
+      );
+      pipe.rotation.x = Math.PI / 2;
+      pipe.position.set(51.6, 6.6 + i * 0.55, 0);
+      this.scene.add(pipe);
+    }
+
+    /* scrap crates by the doorway — cover on both sides of the threshold */
+    const crateMatAnx = new THREE.MeshLambertMaterial({ map: texCrate });
+    const crateSpotsAnx: [number, number, number][] = [
+      [35.4, -6.2, 1.7],
+      [36.6, 6.6, 1.5],
+    ];
+    for (const [cx, cz, cs] of crateSpotsAnx) {
+      const c = new THREE.Mesh(new THREE.BoxGeometry(cs, cs, cs), crateMatAnx);
+      c.position.set(cx, cs / 2, cz);
+      c.rotation.y = Math.random() * 0.7;
+      c.userData.hit = { kind: "solid" };
+      this.scene.add(c);
+      this.shootables.push(c);
+      this.addObstacle(cx, cz, cs / 2 + 0.05, cs / 2 + 0.05);
+    }
+
+    /* catwalk against the back wall — headroom underneath, purely visual */
+    const catMatAnx = new THREE.MeshLambertMaterial({ color: "#2c2f33", flatShading: true });
+    const walk = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.16, 13), catMatAnx);
+    walk.position.set(50.5, 4.3, 0);
+    this.scene.add(walk);
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.9, 13), catMatAnx);
+    rail.position.set(48.95, 4.9, 0);
+    this.scene.add(rail);
+    for (let i = 0; i < 4; i++) {
+      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.18, 4.3, 0.18), catMatAnx);
+      leg.position.set(i % 2 === 0 ? 49.3 : 51.7, 2.15, i < 2 ? -5.5 : 5.5);
+      this.scene.add(leg);
+    }
+
+    /* one cold hanging lamp in the annex */
+    const cordAnx = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 3.0, 4), beamMat);
+    cordAnx.position.set(42.5, 9.3, 0);
+    this.scene.add(cordAnx);
+    const bulbAnx = new THREE.Mesh(new THREE.SphereGeometry(0.2, 6, 6), new THREE.MeshBasicMaterial({ color: "#cfe0ee" }));
+    bulbAnx.position.set(42.5, 7.7, 0);
+    this.scene.add(bulbAnx);
+    const lampAnx = new THREE.PointLight(new THREE.Color("#9fc2de"), 46, 20, 1.5);
+    lampAnx.position.set(42.5, 7.5, 0);
+    this.scene.add(lampAnx);
+    this.lamps.push({ light: lampAnx, base: 46, broken: false, seed: Math.random() * 10 });
 
     /* spawn gates — dark alcoves with red lamps */
     const gateMat = new THREE.MeshBasicMaterial({ color: "#050302" });
@@ -926,7 +1090,8 @@ export class FoundryGame {
       [0, -ARENA + 0.4, 0],
       [0, ARENA - 0.4, Math.PI],
       [-ARENA + 0.4, 0, Math.PI / 2],
-      [ARENA - 0.4, 0, -Math.PI / 2],
+      /* the fourth gate now pours raiders out of the annex back wall */
+      [ANX_X - 0.8, 0, -Math.PI / 2],
     ];
     for (const [gx, gz, gry] of gatePositions) {
       const g = new THREE.Group();
@@ -1074,6 +1239,8 @@ export class FoundryGame {
     const barrelSpots: [number, number, boolean][] = [
       [-4.6, -8, true], [6.2, 2.4, true], [-11, -2, true], [10, 14, true], [-18, 12, true], [3.4, -1.2, true],
       [14, -14, false], [-8, 18, false], [20, 8, false], [-24, -6, false],
+      /* volatile pair guarding the annex boilers */
+      [42.5, -13, true], [43.5, 12.5, true],
     ];
     for (const [bx, bz, boom] of barrelSpots) {
       const m = new THREE.Mesh(barrelGeo, boom ? boomMat : oilMat);
@@ -1189,21 +1356,25 @@ export class FoundryGame {
       this.scene.add(pool);
     }
 
-    /* ---- east wall (x = +32): four windows, shafts on the outer pair ---- */
-    for (const wz of [-18, -6, 6, 18]) {
+    /* The old east-wall windows are gone: that wall (x=32) is now an interior
+       partition around the annex doorway, so exterior windows there made no
+       sense. Daylight for this side now comes from the annex back wall. */
+
+    /* ---- annex back wall (x = 53): clerestory windows, cold light spilling
+       in past the boilers. The glass sits just inside the wall's inner face
+       (x=52.4) so it actually renders from within the room. ---- */
+    for (const wz of [-11, 0, 11]) {
       const win = mkWindow();
       win.rotation.y = -Math.PI / 2;
-      win.position.set(31.32, 0, wz);
+      win.position.set(52.32, 0, wz);
       this.scene.add(win);
-    }
-    for (const wz of [-18, 18]) {
       const sh = mkShaft();
-      sh.position.set(31.3 - REACH / 2, 4, wz);
+      sh.position.set(52.3 - REACH / 2, 4, wz);
       sh.rotation.z = -TILT;
       this.scene.add(sh);
       const pool = new THREE.Mesh(new THREE.PlaneGeometry(6.6, 3.8), poolMat);
       pool.rotation.x = -Math.PI / 2;
-      pool.position.set(31.3 - REACH, 0.03, wz);
+      pool.position.set(52.3 - REACH, 0.03, wz);
       this.scene.add(pool);
     }
 
@@ -2391,6 +2562,7 @@ export class FoundryGame {
     impulseRagdoll(e.ragdoll, point, dir, force, e.mvx, e.mvz);
     this.removeEnemyFromShootables(e);
     this.kills++;
+    this.hitstop = 0.045; /* a beat of frozen time sells the kill */
     this.combo = this.comboT > 0 ? this.combo + 1 : 1;
     this.comboT = 2.6;
     const mult = Math.min(this.combo, 8);
@@ -2786,6 +2958,7 @@ export class FoundryGame {
 
   private damagePlayer(dmg: number, from?: THREE.Vector3, projectile = false) {
     if (this.phase !== "playing") return;
+    if (this.debug) return; /* god mode — the foundry can't touch you */
     this.hp = Math.max(0, this.hp - dmg * (1 - this.dmgResist));
     this.regenT = 0;
     if (this.hp <= 0 && this.secondWind && !this.secondWindUsed) {
@@ -2800,7 +2973,16 @@ export class FoundryGame {
       return;
     }
     this.trauma = Math.min(1.5, this.trauma + 0.55);
-    this.onEvent({ type: "damage" });
+    /* attacker bearing relative to the player's facing, for the damage arc */
+    let dmgAngle = 0;
+    if (from) {
+      const toX = from.x - this.pos.x;
+      const toZ = from.z - this.pos.z;
+      const fwd = toX * -Math.sin(this.yaw) + toZ * -Math.cos(this.yaw);
+      const rgt = toX * Math.cos(this.yaw) + toZ * -Math.sin(this.yaw);
+      dmgAngle = Math.atan2(rgt, fwd); /* 0 = ahead, + = right, ±π = behind */
+    }
+    this.onEvent({ type: "damage", angle: dmgAngle });
     sfx.hurt();
     if (from) {
       const dx = this.pos.x - from.x;
@@ -2852,7 +3034,7 @@ export class FoundryGame {
       [0, -ARENA + 2.5],
       [0, ARENA - 2.5],
       [-ARENA + 2.5, 0],
-      [ARENA - 2.5, 0],
+      [52.0, 0], /* raiders pour in through the annex */
     ];
     for (let i = gates.length - 1; i > 0; i--) {
       const j = (Math.random() * (i + 1)) | 0;
@@ -3047,6 +3229,32 @@ export class FoundryGame {
     this.emitLocker(this.lockerOpen);
   }
 
+  /* ============================== debug ============================== */
+
+  private debug = false;
+
+  /** F9 — toggle god mode, grant the full Mk.II locker and top everything up.
+      Parts stay granted when it's switched off; only the invincibility goes. */
+  toggleDebug() {
+    if (this.phase !== "playing" && this.phase !== "paused") return;
+    this.debug = !this.debug;
+    if (this.debug) {
+      for (const m of GUN_MODS) {
+        if (!this.ownedMods.includes(m.id)) this.ownedMods.push(m.id);
+        this.ownedTier[m.id] = 2;
+      }
+      /* mount the laser on every rail so the aim ray is visible everywhere */
+      this.equippedMods = ["laser", "laser", "laser", "laser"];
+      this.refreshModVisuals();
+      /* full heal, full mags, full reserves */
+      this.hp = this.maxHp;
+      this.mags = WEAPONS.map((wp, i) => this.effMagSize(i) || wp.magSize);
+      this.reserves = [Infinity, this.reserveCap(1), this.reserveCap(2), this.reserveCap(3)];
+      sfx.waveClear();
+    }
+    this.onEvent({ type: "debug", on: this.debug });
+  }
+
   private applyCard(id: string) {
     const lv = this.skillLevels[id] ?? 0;
     switch (id) {
@@ -3099,7 +3307,8 @@ export class FoundryGame {
   /* ============================== Collision ============================== */
 
   private collideCircle(p: THREE.Vector3, r: number) {
-    p.x = Math.max(-ARENA + r, Math.min(ARENA - r, p.x));
+    /* outer shell: hall to the west, annex extending east to the back wall */
+    p.x = Math.max(-ARENA + r, Math.min(52.4 - r, p.x));
     p.z = Math.max(-ARENA + r, Math.min(ARENA - r, p.z));
     for (const o of this.obstacles) {
       const cx = Math.max(o.minX, Math.min(p.x, o.maxX));
@@ -3126,7 +3335,12 @@ export class FoundryGame {
   private update(rawDt: number) {
     const t = this.clock.elapsedTime;
     const slow = this.phase === "dead" ? 0.35 : 1;
-    const dt = rawDt * slow;
+    let dt = rawDt * slow;
+    /* micro hit-stop on a fresh kill — the world blinks, then catches up */
+    if (this.hitstop > 0) {
+      this.hitstop -= rawDt;
+      dt *= 0.15;
+    }
 
     /* ambient life */
     for (const l of this.lamps) {
@@ -3138,6 +3352,13 @@ export class FoundryGame {
     for (const gl of this.gateLights) gl.intensity += (26 - gl.intensity) * Math.min(1, dt * 6);
     for (const f of this.fans) f.rotation.z += dt * 4.5;
     this.updateMotes(dt);
+    /* furnace embers — a few live sparks drift up from the smelter mouth */
+    this.emberT -= dt;
+    if (this.emberT <= 0) {
+      this.emberT = 0.4 + Math.random() * 0.3;
+      this.tmpV3.set((Math.random() - 0.5) * 1.6, 1.7 + Math.random() * 0.4, 1.2 + (Math.random() - 0.5) * 0.5);
+      this.spawnParticles(this.tmpV3.clone(), 2, ["#ff6b1a", "#ffb42e", "#ff9040"], 0.5, 1.1, -1.6);
+    }
 
     if (this.phase === "attract") {
       const a = t * 0.14;
@@ -3239,6 +3460,16 @@ export class FoundryGame {
     this.regenT += dt;
     if (this.regenT > 5 && this.hp > 0 && this.hp < 100) this.hp = Math.min(100, this.hp + 4 * dt);
 
+    /* low-integrity heartbeat — faster and louder the closer to scrap */
+    if (this.phase === "playing" && this.hp > 0 && this.hp < 30) {
+      this.heartT -= dt;
+      if (this.heartT <= 0) {
+        const urgency = 1 - this.hp / 30; /* 0 at 30hp → 1 at 0hp */
+        this.heartT = 1.05 - urgency * 0.55;
+        sfx.heartbeat(0.5 + urgency * 0.5);
+      }
+    }
+
     /* ---------- weapons ---------- */
     this.fireCd -= dt;
     this.heat = Math.max(0, this.heat - dt * WEAPONS[this.weaponIdx].bloomRecover);
@@ -3271,6 +3502,7 @@ export class FoundryGame {
           this.wT = 0.2;
         } else {
           this.wState = "idle";
+          sfx.equip(this.weaponIdx); /* each gun announces itself as it comes up */
         }
       }
     } else if (this.wState === "reloading") {
@@ -3556,6 +3788,7 @@ export class FoundryGame {
           : this.weaponIdx === 1
             ? Math.min(1, this.shellT / this.effReload(w))
             : Math.min(1, 1 - this.wT / this.effReload(w)),
+      lowAmmo: this.mags[this.weaponIdx] <= Math.ceil(this.effMagSize(this.weaponIdx) * 0.25),
       combo: this.combo > 1 ? this.combo : 0,
       enemiesLeft: this.waveMode === "active" ? alive : 0,
     });
@@ -3895,7 +4128,7 @@ export class FoundryGame {
             this.damagePlayer(e.dmg, e.group.position);
             /* the slam shoves you off your footing */
             const sh = 1.15;
-            this.pos.x = Math.max(-30, Math.min(30, this.pos.x + (dx / dist) * sh));
+            this.pos.x = Math.max(-30, Math.min(51.4, this.pos.x + (dx / dist) * sh));
             this.pos.z = Math.max(-30, Math.min(30, this.pos.z + (dz / dist) * sh));
           }
         }
@@ -4064,7 +4297,7 @@ export class FoundryGame {
     if (ds < 3.2) {
       this.damagePlayer(20, e.group.position);
       const sh = 1.2;
-      this.pos.x = Math.max(-30, Math.min(30, this.pos.x + (dxs / ds) * sh));
+      this.pos.x = Math.max(-30, Math.min(51.4, this.pos.x + (dxs / ds) * sh));
       this.pos.z = Math.max(-30, Math.min(30, this.pos.z + (dzs / ds) * sh));
     }
   }

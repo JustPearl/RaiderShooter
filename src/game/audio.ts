@@ -272,6 +272,36 @@ export class SFX {
   uiMove() {
     this.tone(0.06, { type: "square", freq: 880, slideTo: 660, gain: 0.06 });
   }
+
+  /* low-integrity heartbeat — a muffled double-thump, volume scales with urgency */
+  heartbeat(v: number) {
+    this.ensure();
+    this.tone(0.09, { type: "sine", freq: 64, slideTo: 46, gain: 0.18 * v });
+    this.tone(0.07, { type: "sine", freq: 58, slideTo: 42, gain: 0.11 * v, delay: 0.16 });
+  }
+
+  /* weapon seated home — a different mechanical character per gun */
+  equip(idx: number) {
+    this.ensure();
+    if (idx === 0) {
+      /* slide release + chamber check */
+      this.noise(0.03, { type: "bandpass", freq: 2200 * this.j(1), q: 7, gain: 0.14 });
+      this.noise(0.03, { type: "bandpass", freq: 1400 * this.j(1), q: 6, gain: 0.12, delay: 0.07 });
+    } else if (idx === 1) {
+      /* forend snap */
+      this.noise(0.035, { type: "bandpass", freq: 1750 * this.j(1), q: 5, gain: 0.16 });
+      this.noise(0.03, { type: "bandpass", freq: 950 * this.j(1), q: 5, gain: 0.13, delay: 0.06 });
+    } else if (idx === 2) {
+      /* magazine lock-in */
+      this.noise(0.025, { type: "bandpass", freq: 2600 * this.j(1), q: 8, gain: 0.12 });
+      this.noise(0.04, { type: "bandpass", freq: 1150 * this.j(1), q: 6, gain: 0.14, delay: 0.05 });
+    } else {
+      /* feed cover thud + belt rattle */
+      this.noise(0.05, { type: "bandpass", freq: 700 * this.j(1), q: 4, gain: 0.17 });
+      this.noise(0.03, { type: "bandpass", freq: 3100 * this.j(1), q: 7, gain: 0.09, delay: 0.09 });
+      this.noise(0.03, { type: "bandpass", freq: 2500 * this.j(1), q: 7, gain: 0.08, delay: 0.15 });
+    }
+  }
 }
 
 export const sfx = new SFX();

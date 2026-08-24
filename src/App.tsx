@@ -106,7 +106,11 @@ export default function App() {
   const gapRefs = [useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null), useRef<HTMLDivElement>(null)];
   const comboRef = useRef<HTMLDivElement>(null);
   const dmgRef = useRef<HTMLDivElement>(null);
+  const dmgDirRef = useRef<HTMLDivElement>(null);
+  const dmgDirTimer = useRef(0);
   const lowHpRef = useRef<HTMLDivElement>(null);
+  const lastScore = useRef(0);
+  const scorePopTimer = useRef(0);
   const ringWrapRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<SVGCircleElement>(null);
   const pipsRef = useRef<HTMLDivElement>(null);
@@ -207,6 +211,15 @@ export default function App() {
               }
             });
           }
+          /* wedge pointing at the attacker — rotates with the engine's angle */
+          if (dmgDirRef.current) {
+            dmgDirRef.current.style.transform = `translate(-50%,-50%) rotate(${e.angle}rad)`;
+            dmgDirRef.current.style.opacity = "1";
+            window.clearTimeout(dmgDirTimer.current);
+            dmgDirTimer.current = window.setTimeout(() => {
+              if (dmgDirRef.current) dmgDirRef.current.style.opacity = "0";
+            }, 420);
+          }
           break;
         case "wave":
           setBanner({ key: uid++, title: `WAVE ${String(e.wave).padStart(2, "0")}`, sub: `${e.count} RAIDERS BREACHING THE FLOOR`, tone: "orange" });
@@ -239,6 +252,7 @@ export default function App() {
       if (ammoText.current) {
         ammoText.current.textContent = String(h.ammo);
         ammoText.current.style.color = h.ammo === 0 ? "#ff2e1f" : h.ammo <= 2 ? "#ffb42e" : "#ffe8c8";
+        ammoText.current.classList.toggle("ammo-low", h.lowAmmo && h.ammo > 0);
       }
       if (reserveText.current) reserveText.current.textContent = h.reserve < 0 ? "∞" : String(h.reserve);
       if (ammoLineText.current) ammoLineText.current.textContent = h.ammoLine;
@@ -249,7 +263,15 @@ export default function App() {
       }
       if (weaponName.current) weaponName.current.textContent = h.weaponName;
       if (waveText.current) waveText.current.textContent = String(Math.max(1, h.wave)).padStart(2, "0");
-      if (scoreText.current) scoreText.current.textContent = String(h.score).padStart(6, "0");
+      if (scoreText.current) {
+        scoreText.current.textContent = String(h.score).padStart(6, "0");
+        if (h.score > lastScore.current) {
+          scoreText.current.classList.remove("score-pop");
+          void scoreText.current.offsetWidth; /* restart the animation */
+          scoreText.current.classList.add("score-pop");
+        }
+        lastScore.current = h.score;
+      }
       if (killsText.current) killsText.current.textContent = String(h.kills).padStart(3, "0");
       if (hostilesText.current) hostilesText.current.textContent = String(h.enemiesLeft);
       const g = h.spreadGap;
@@ -346,6 +368,14 @@ export default function App() {
         style={{ opacity: 0, background: "radial-gradient(ellipse 80% 70% at 50% 50%, transparent 30%, rgba(255,20,8,0.6) 100%)" }}
       />
       <div ref={lowHpRef} className="lowhp-vignette pointer-events-none fixed inset-0 z-40" style={{ visibility: "hidden" }} />
+      {/* attacker-direction wedge — orbits the screen edge toward the threat */}
+      <div ref={dmgDirRef} className="pointer-events-none fixed left-1/2 top-1/2 z-40" style={{ opacity: 0, transition: "opacity 0.4s ease-out" }}>
+        <div className="absolute left-0 top-0" style={{ transform: "translate(-50%,-50%) translateY(-38vh)" }}>
+          <svg width="96" height="50" viewBox="0 0 96 50">
+            <path d="M12 6 L48 44 L84 6" fill="none" stroke="#ff2e1f" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" style={{ filter: "drop-shadow(0 0 8px rgba(255,46,31,0.8))" }} />
+          </svg>
+        </div>
+      </div>
 
       {/* ======= HUD ======= */}
       {inGame && (
