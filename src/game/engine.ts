@@ -1350,38 +1350,25 @@ export class FoundryGame {
       this.scene.add(pool);
     }
 
-    /* ---- east wall (x = +32): four windows, shafts on the outer pair ---- */
-    /* shifted clear of the annex doorway (z −5..+5) */
-    for (const wz of [-24, -12, 12, 24]) {
-      const win = mkWindow();
-      win.rotation.y = -Math.PI / 2;
-      win.position.set(31.32, 0, wz);
-      this.scene.add(win);
-    }
-    for (const wz of [-24, 24]) {
-      const sh = mkShaft();
-      sh.position.set(31.3 - REACH / 2, 4, wz);
-      sh.rotation.z = -TILT;
-      this.scene.add(sh);
-      const pool = new THREE.Mesh(new THREE.PlaneGeometry(6.6, 3.8), poolMat);
-      pool.rotation.x = -Math.PI / 2;
-      pool.position.set(31.3 - REACH, 0.03, wz);
-      this.scene.add(pool);
-    }
+    /* The old east-wall windows are gone: that wall (x=32) is now an interior
+       partition around the annex doorway, so exterior windows there made no
+       sense. Daylight for this side now comes from the annex back wall. */
 
-    /* ---- annex back wall (x = 53): two windows, cold light spilling in ---- */
-    for (const wz of [-8, 8]) {
+    /* ---- annex back wall (x = 53): clerestory windows, cold light spilling
+       in past the boilers. The glass sits just inside the wall's inner face
+       (x=52.4) so it actually renders from within the room. ---- */
+    for (const wz of [-11, 0, 11]) {
       const win = mkWindow();
       win.rotation.y = -Math.PI / 2;
-      win.position.set(52.68, 0, wz);
+      win.position.set(52.32, 0, wz);
       this.scene.add(win);
       const sh = mkShaft();
-      sh.position.set(52.7 - REACH / 2, 4, wz);
+      sh.position.set(52.3 - REACH / 2, 4, wz);
       sh.rotation.z = -TILT;
       this.scene.add(sh);
       const pool = new THREE.Mesh(new THREE.PlaneGeometry(6.6, 3.8), poolMat);
       pool.rotation.x = -Math.PI / 2;
-      pool.position.set(52.7 - REACH, 0.03, wz);
+      pool.position.set(52.3 - REACH, 0.03, wz);
       this.scene.add(pool);
     }
 
